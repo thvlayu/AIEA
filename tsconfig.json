@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "types": ["bun"],
     "strict": true,
+    "jsx": "react-jsx",
     "noEmit": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,

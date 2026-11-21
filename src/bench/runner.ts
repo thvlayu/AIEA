@@ -1,8 +1,8 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { RESULTS_DIR, ensureDir, stamp, sanitizeName } from "../paths";
-import type { ModelConfig, SuiteConfig } from "../config/types";
-import { loadModelConfig } from "../config/load";
+import type { ModelConfig, ModelSampling, ModelRuntime, ReasoningEffort, SuiteConfig } from "../config/types";
+import { applyOverrides, loadModelConfig } from "../config/load";
 import type { LlamaBinary } from "../llama/resolve";
 import { ensureModelFiles } from "../llama/hf";
 import { startServer } from "../llama/server";
@@ -16,7 +16,13 @@ export interface RunHooks {
   log?: (line: string) => void;
   active?: (info: { tierLabel: string; promptLabel: string; sampleIdx: number; samplesTotal: number }) => void;
   sampleDone?: (info: { tierLabel: string; samplesDone: number; samplesTotal: number }) => void;
-  promptDone?: (info: { tierLabel: string; promptsDone: number; promptsTotal: number; score: number }) => void;
+  promptDone?: (info: {
+    tierLabel: string;
+    promptsDone: number;
+    promptsTotal: number;
+    score: number;
+    stats?: { label: string; score: number; distinctRatio: number; distinctCount: number; modalShare: number; slopPer100: number };
+  }) => void;
   tierDone?: (info: { tierId: string; tierLabel: string; score: number }) => void;
   fileProgress?: (info: { label: string; loaded: number; total: number }) => void;
   done?: (summary: RunSummary) => void;
@@ -59,6 +65,11 @@ export interface RunOptions {
   samples?: number;
   seed?: number;
   dry?: boolean;
+  judgeOverrides?: {
+    sampling?: Partial<ModelSampling>;
+    runtime?: Partial<ModelRuntime>;
+    reasoning?: { effort?: ReasoningEffort };
+  };
   abortRef?: { aborted: boolean };
   hooks?: RunHooks;
 }
@@ -119,7 +130,8 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
   let judge: JudgeClient | null = null;
   if (suite.judge) {
     try {
-      const jcfg = await loadModelConfig(suite.judge.model);
+      const jcfgLoaded = await loadModelConfig(suite.judge.model);
+      const jcfg = applyOverrides(jcfgLoaded, opts.judgeOverrides);
       const jport = jcfg.runtime.port === model.runtime.port ? model.runtime.port + 1 : jcfg.runtime.port;
       const jModel = jcfg.local_path
         ? jcfg.local_path
@@ -247,6 +259,14 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
         promptsDone: tier.promptsDone,
         promptsTotal: tier.promptsTotal,
         score: tier.score,
+        stats: {
+          label: stats.label,
+          score: stats.score,
+          distinctRatio: stats.distinctRatio,
+          distinctCount: stats.distinctCount,
+          modalShare: stats.modalShare,
+          slopPer100: stats.slopPer100,
+        },
       });
       log(
         `prompt ${item.probe.id}: score ${(stats.score * 100).toFixed(1)} distinct ${stats.distinctCount}/${texts.length} modal ${(stats.modalShare * 100).toFixed(0)}% slop ${stats.slopPer100.toFixed(1)}/100w`,

@@ -9,7 +9,7 @@ import { distinctStats, computePromptStats } from "../src/bench/metrics";
 import { slopStats } from "../src/suites/creativity/checks";
 import { tierPrompts } from "../src/suites/creativity/prompts";
 import { buildPlan } from "../src/bench/plan";
-import { runMockFlat } from "../src/ui/mock";
+import { runMockFlat } from "../src/ink/flat-mock";
 import { writeRunReport, updateLeaderboard } from "../src/report/report";
 import { runSuite, type RunSummary } from "../src/bench/runner";
 import type { TierResult } from "../src/bench/runner";

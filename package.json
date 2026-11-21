@@ -7,10 +7,16 @@
   "scripts": {
     "aiea": "bun run src/cli.ts",
     "mock": "bun run src/cli.ts mock",
+    "dev:mock": "bun run src/cli.ts mock",
     "typecheck": "bunx tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "^1.2.0",
+    "@types/react": "^19",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "ink": "^6",
+    "react": "^19"
   }
 }

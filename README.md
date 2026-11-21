@@ -71,8 +71,8 @@ bun run scripts/smoke-cli.ts
 ## Usage
 
 ```
-bun run aiea          # interactive menu (arrows, enter, esc, q)
-bun run mock          # preview the exact run screen with synthetic data, no model needed
+bun run aiea          # interactive Ink UI: specimen, teacher, configs, run
+bun run dev:mock      # same UI with synthetic data; no model needed
 bun run aiea run --model qwen3.5-4b-q4
 bun run aiea run --model qwen3.5-4b-q4 --dry
 bun run aiea run --model qwen3.5-4b-q4 --samples 8 --seed 42 --json
@@ -84,6 +84,29 @@ bun run aiea results latest
 
 `bun run aiea run` works headless (no TTY) and prints flat progress lines, so it can be
 launched over ssh or inside a Colab VM session without an interactive terminal.
+
+## Interactive UI
+
+The interactive path is built with [Ink](https://github.com/vadimdemedes/ink) (React for
+terminals). `bun run aiea` walks through:
+
+1. **Specimen** - pick the model under test from `configs/models/`.
+2. **Specimen config** - edit temperature, top_p, top_k, min_p, repeat penalty, context,
+   GPU layers, port, reasoning effort. Edits are run-scoped overrides; YAMLs are not
+   rewritten.
+3. **Teacher** - pick the judge model, or "none" for heuristic-only scoring.
+4. **Teacher config** - same fields, applied to the judge server via run-scoped overrides.
+5. **Suite** - confirm samples per prompt and run seed.
+6. **Run screen** - live per-tier progress bars (prompts and samples), spinner on the
+   active sample, a "latest prompt" metrics card, and a rolling log pane. `q` or `esc`
+   aborts; a partial report is still written.
+7. **Summary screen** - the ACI, a tier table, run-level metrics, and a per-prompt
+   metrics table for every tier (distinct, modal share, river share, slop density).
+
+`bun run dev:mock` runs the exact same flow with a synthetic student, a synthetic
+teacher, fabricated outputs, and fabricated metrics, at accelerated speed. It exists so
+the UI can be reviewed without a GPU. Headless (non-TTY) invocations fall back to flat
+mock lines automatically.
 
 ## The llama binary
 
@@ -172,12 +195,13 @@ The `-ngl 99` default offloads all layers; on a T4 use the 2B config for comfort
 
 - Heuristic scoring path: implemented and smoke-tested (config loading, HF file
   resolution, metrics, planning, report and leaderboard writing).
+- Ink interactive UI: implemented and typechecked; JSX/Ink/React render pipeline verified
+  under Bun with a component probe. Full TTY walkthrough (arrow keys, config forms, live
+  run screen) still needs one real-terminal session to confirm.
 - Judge path: fully wired but only exercisable once a judge model is configured; treat it
   as unverified until then.
 - HF download path: implemented with resume-less chunked download; it has not been
   exercised on a real network run yet. First VM session should verify it.
-- TUI path: implemented for real terminals; smoke runs exercise the flat fallback. First
-  interactive session on the VM should confirm the full-screen rendering.
 
 ## License
 

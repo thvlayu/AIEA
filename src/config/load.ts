@@ -109,6 +109,19 @@ export async function listModelConfigNames(): Promise<string[]> {
   }
 }
 
+export function applyOverrides(
+  base: ModelConfig,
+  ovr?: { sampling?: Partial<ModelSampling>; runtime?: Partial<ModelRuntime>; reasoning?: { effort?: ReasoningEffort } },
+): ModelConfig {
+  if (!ovr) return base;
+  return {
+    ...base,
+    sampling: { ...base.sampling, ...(ovr.sampling ?? {}) },
+    runtime: { ...base.runtime, ...(ovr.runtime ?? {}) },
+    reasoning: { effort: ovr.reasoning?.effort ?? base.reasoning.effort },
+  };
+}
+
 export async function loadModelConfig(nameOrPath: string): Promise<ModelConfig> {
   const p =
     nameOrPath.endsWith(".yaml") || nameOrPath.endsWith(".yml") || nameOrPath.includes(path.sep)

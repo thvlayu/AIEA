@@ -1,12 +1,11 @@
 import path from "node:path";
 import { readdir } from "node:fs/promises";
-import { menuMain } from "./ui/menu";
-import { runMock, runMockFlat } from "./ui/mock";
+import { runApp } from "./ink/App";
+import { runMockFlat } from "./ink/flat-mock";
 import { listModelConfigNames, loadModelConfig, loadSuiteConfig } from "./config/load";
 import { resolveLlama, missingLlamaMessage } from "./llama/resolve";
 import { runSuite } from "./bench/runner";
 import { buildPlan } from "./bench/plan";
-import { createRunConsole, emptyRunViewState, hooksFromConsole, failConsole } from "./ui/runscreen";
 import { ensureModelFiles } from "./llama/hf";
 import { RESULTS_DIR } from "./paths";
 
@@ -42,9 +41,9 @@ const USAGE = [
   "usage: bun run aiea [command] [flags]",
   "",
   "commands:",
-  "  (none)                interactive menu (needs a TTY)",
-  "  mock                  preview the run screen with synthetic data",
-  "  run --model NAME      run a suite against a model config",
+  "  (none)                interactive Ink UI (specimen, teacher, configs, run)",
+  "  mock | dev:mock       same interactive UI with synthetic data, no model",
+  "  run --model NAME      headless suite run against a model config",
   "      [--suite creativity] [--samples N] [--seed N] [--dry] [--json]",
   "  models list           list model configs",
   "  models download NAME  download the model file declared by a config",
@@ -59,8 +58,12 @@ const USAGE = [
 
 async function cmdMock(flags: Flags): Promise<number> {
   const seed = Number(flags.named["seed"] ?? 20260101);
-  if (process.stdout.isTTY) await runMock(Number.isFinite(seed) ? seed : 20260101);
-  else await runMockFlat(Number.isFinite(seed) ? seed : 20260101);
+  const useSeed = Number.isFinite(seed) ? seed : 20260101;
+  if (process.stdout.isTTY) {
+    await runApp(true);
+  } else {
+    await runMockFlat(useSeed);
+  }
   return 0;
 }
 
@@ -94,46 +97,6 @@ async function cmdRun(flags: Flags): Promise<number> {
   if (!binary) {
     process.stdout.write(missingLlamaMessage() + "\n");
     return 1;
-  }
-
-  if (process.stdout.isTTY) {
-    const tierLabels = suite.tiers.filter((t) => t.enabled).map((t) => t.label);
-    const state = emptyRunViewState({
-      model: model.name,
-      suite: suite.id,
-      seed: seed ?? suite.defaults.seed,
-      mock: false,
-      tierLabels,
-      samplesPerPrompt: samples ?? suite.defaults.samples_per_prompt,
-    });
-    const console_ = createRunConsole(state);
-    const abortRef = { aborted: false };
-    const { startKeys } = await import("./ui/keys");
-    const keys = startKeys((k) => {
-      if (k === "quit" || k === "esc") {
-        abortRef.aborted = true;
-        console_.log("abort requested by user");
-        console_.render();
-      }
-    });
-    try {
-      const summary = await runSuite({
-        model,
-        suite,
-        binary,
-        samples,
-        seed,
-        abortRef,
-        hooks: hooksFromConsole(console_),
-      });
-      process.stdout.write(`\nACI ${summary.aci.toFixed(1)} / 100\nreport: ${summary.outDir}\n`);
-      return summary.aborted ? 1 : 0;
-    } catch (err) {
-      failConsole(console_, err as Error);
-      return 1;
-    } finally {
-      keys.stop();
-    }
   }
 
   const json = flags.named["json"] === true;
@@ -270,11 +233,24 @@ async function main(): Promise<number> {
   const cmd = argv[0];
   const flags = parseFlags(argv.slice(1));
   if (cmd === undefined || cmd === "menu") {
-    await menuMain();
+    if (process.stdout.isTTY) {
+      await runApp(false);
+      return 0;
+    }
+    process.stdout.write(
+      [
+        "The interactive UI needs a real terminal (TTY).",
+        "",
+        "From a terminal:  bun run aiea",
+        "Mock preview:     bun run dev:mock",
+        "Headless run:     bun run aiea run --model qwen3.5-4b-q4",
+      ].join("\n") + "\n",
+    );
     return 0;
   }
   switch (cmd) {
     case "mock":
+    case "dev:mock":
       return cmdMock(flags);
     case "run":
       return cmdRun(flags);
