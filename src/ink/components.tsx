@@ -84,7 +84,7 @@ function sampleCycle(p: number): string {
 
 export function FlowText({
   text,
-  period = 2.5,
+  period = 1,
   bold,
 }: {
   text: string;
@@ -93,7 +93,7 @@ export function FlowText({
 }) {
   const [offset, setOffset] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setOffset((o) => (o + 0.06) % 1), 120);
+    const t = setInterval(() => setOffset((o) => (o + 0.04) % 1), 110);
     return () => clearInterval(t);
   }, []);
   const chars = [...text];
@@ -105,6 +105,20 @@ export function FlowText({
         </Text>
       ))}
     </Text>
+  );
+}
+
+export function Rule({ color = "#3a3d44" }: { color?: string }) {
+  return (
+    <Box
+      borderStyle="single"
+      borderTop
+      borderLeft={false}
+      borderRight={false}
+      borderBottom={false}
+      borderColor={color}
+      width="100%"
+    />
   );
 }
 
@@ -332,12 +346,6 @@ export function PromptInput({
   const [value, setValue] = useState("");
   const [hist, setHist] = useState<string[]>([]);
   const [histIdx, setHistIdx] = useState<number | null>(null);
-  const [blink, setBlink] = useState(true);
-
-  useEffect(() => {
-    const t = setInterval(() => setBlink((b) => !b), 530);
-    return () => clearInterval(t);
-  }, []);
 
   useInput((input, key) => {
     if (key.return) {
@@ -402,10 +410,12 @@ export function PromptInput({
         <Text color={WHITE} bold>
           ❯{" "}
         </Text>
-        {value.length === 0 && placeholder ? <Text dimColor>{placeholder}</Text> : <Text color="white">{value}</Text>}
-        <Text inverse={blink} color={blink ? "black" : WHITE}>
-          {" "}
-        </Text>
+        {value.length === 0 && placeholder ? (
+          <Text dimColor>{placeholder}</Text>
+        ) : (
+          <Text color="white">{value}</Text>
+        )}
+        <Text color={WHITE}>█</Text>
       </Box>
     </Box>
   );

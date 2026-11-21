@@ -67,10 +67,12 @@ export async function startServer(
   cfg: ModelConfig,
   modelPath: string,
   logDir: string,
+  opts?: { extraArgs?: string[] },
 ): Promise<StartedServer> {
   await ensureDir(logDir);
   const logPath = path.join(logDir, "llama-server.log");
   const args = buildServerArgs(cfg, modelPath, bin);
+  if (opts?.extraArgs) args.push(...opts.extraArgs);
   const proc = Bun.spawn([bin.path, ...args], {
     stdin: "ignore",
     stdout: "pipe",

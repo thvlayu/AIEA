@@ -146,6 +146,7 @@ function fakeStats(probe: Probe, idx: number, seed: number): PromptStats {
     probeId: probe.id,
     label: probe.label,
     score: 0,
+    semantic: det(s, 40, 0, 1) > 0.3,
     distinctRatio: det(s, 1, 0.4, 1),
     distinctCount: 3,
     meanPairSim: det(s, 2, 0.15, 0.45),
@@ -158,9 +159,17 @@ function fakeStats(probe: Probe, idx: number, seed: number): PromptStats {
     adherence: det(s, 8, 0.8, 1),
     elementsPresentRatio: det(s, 9, 0.6, 1),
     ttcwPassRatio: det(s, 10, 0.4, 0.9),
+    ttcwProgrammatic: 5,
     windowOk: det(s, 11, 0, 1) > 0.3 ? 1 : 0,
     conceptMentionRatio: det(s, 12, 0.5, 1),
     wordCountMean: probe.kind === "story" ? det(s, 13, 580, 820) : det(s, 13, 90, 260),
+    clicheProximity: det(s, 14, 0.05, 0.6),
+    semDiversity: det(s, 15, 0.3, 0.95),
+    minPairDist: det(s, 16, 0.1, 0.7),
+    slopSim: det(s, 17, 0.05, 0.5),
+    flexibility: det(s, 18, 0.4, 1),
+    originality: det(s, 19, 0.4, 0.95),
+    elaboration: det(s, 20, 0.3, 0.9),
   };
   base.distinctCount = Math.max(1, Math.round(base.distinctRatio * 5));
   switch (probe.kind) {

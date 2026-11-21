@@ -199,6 +199,27 @@ export async function loadSuiteConfig(name = "creativity"): Promise<SuiteConfig>
     judge = { model: j.model as string };
   }
   const outputDir = optStr(doc, "output_dir") ?? "results";
+  const judgeModeRaw = doc.judge_mode;
+  let judgeMode: "sequential" | "concurrent" = "sequential";
+  if (typeof judgeModeRaw === "string") {
+    if (judgeModeRaw !== "sequential" && judgeModeRaw !== "concurrent") {
+      fail(src, 'judge_mode must be "sequential" or "concurrent"');
+    }
+    judgeMode = judgeModeRaw;
+  }
+  let embedder: { hf: string; quant: string | null; file: string | null; port: number } | null = null;
+  if (doc.embedder !== null && doc.embedder !== undefined) {
+    const e = doc.embedder as Record<string, unknown>;
+    if (typeof e.hf !== "string" || e.hf.length === 0) {
+      fail(src, 'embedder must be null or an object like { hf: "<gguf repo>", quant?: "...", file?: "...", port?: 8752 }');
+    }
+    embedder = {
+      hf: e.hf as string,
+      quant: optStr(e, "quant"),
+      file: optStr(e, "file"),
+      port: Math.max(1024, Math.min(65535, Math.round(num(e, "port", 8752, src)))),
+    };
+  }
   const tiersRaw = doc.tiers;
   if (!Array.isArray(tiersRaw) || tiersRaw.length === 0) fail(src, "tiers must be a non-empty list");
   const tiers: SuiteTier[] = tiersRaw.map((raw, i) => {
@@ -236,6 +257,8 @@ export async function loadSuiteConfig(name = "creativity"): Promise<SuiteConfig>
     title,
     defaults: { samples_per_prompt: samples, seed, max_tokens: maxTokens },
     judge,
+    judge_mode: judgeMode,
+    embedder,
     output_dir: outputDir,
     tiers,
   };

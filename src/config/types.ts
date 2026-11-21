@@ -38,11 +38,20 @@ export interface SuiteTier {
   word_window: [number, number] | null;
 }
 
+export interface EmbedderSpec {
+  hf: string;
+  quant: string | null;
+  file: string | null;
+  port: number;
+}
+
 export interface SuiteConfig {
   id: string;
   title: string;
   defaults: { samples_per_prompt: number; seed: number; max_tokens: number };
   judge: { model: string } | null;
+  judge_mode: "sequential" | "concurrent";
+  embedder: EmbedderSpec | null;
   output_dir: string;
   tiers: SuiteTier[];
 }

@@ -41,22 +41,41 @@ config values, not constants.
 ## Scoring
 
 Every prompt yields a 0-1 score; tier score is the mean over its prompts; the composite
-**AIEA-Creativity Index (ACI)** is the weighted mean over tiers, 0-100.
+**AIEA-Creativity Index (ACI)** is the weighted mean over tiers, 0-100. Two scoring
+engines coexist and the report says which one ran:
 
-- **Distinctness**: token Jaccard (45%) + character bigram Dice (55%); a sample counts as
-  distinct when its max similarity to any other sample is below 0.6. With a judge model
-  configured, NoveltyBench-style idea clustering replaces the heuristic for tiers 1-2.
-- **Modal share** (tier 1): fraction of samples that fall in the same answer cluster,
-  including the canonical "time is a river" cluster tracked separately as **river share**.
-- **Slop density**: weighted lexicon hits (words and phrases: tapestry, testament to,
-  beacon of, symphony of, shivers down, breath she didn't know she was holding, ...) per
-  100 generated words.
-- **Rule adherence** (tier 2): wrong letter, repeats, seed-list collisions, proper nouns.
-- **TTCW pass rate** (tier 4): dialogue, sensory detail, sentence-length variance, lexical
-  richness, stock opening, slop density, concrete specifics, word window; the six
-  judge-only tests activate when a judge is configured.
-- **Concept binding** (tier 5): required concept mentions, forbidden-word violations,
-  length window.
+**Semantic engine (active when the embedder starts).** A small embedding model
+(nomic-embed-text-v1.5, GGUF, ~150 MB, served with `--embeddings --pooling mean`) turns
+every sample into a unit vector. On top of it:
+
+- **Cliche proximity** (mode-collapse detector): max cosine similarity of each sample
+  against a canonical exemplar set covering the classic time-metaphor clusters - river,
+  weaving, sands, thief, arrow, devourer, cage, painting, journey (Artificial Hivemind).
+  Tier 1 weights it at 35%.
+- **Semantic diversity** (DAT / Forward Flow, Olson et al., PNAS 2021): mean pairwise
+  cosine distance between samples, normalized; plus worst-pair distance. Drives tiers 1,
+  4, 5 and the word task.
+- **AUT originality** (SemDis method, Beaty & Johnson 2020): distance between each
+  generated use and a canon of *typical uses* for the object (brick, paperclip, coffee
+  cup). Tier 2 uses score fluency, flexibility (semantic cluster count), originality,
+  elaboration.
+- **Slop similarity**: samples are also compared against exemplar AI-slop sentences,
+  combined with the weighted lexicon density in tier 3 and tier 4.
+- **Distinct clusters** replace token clusters: samples are grouped at cosine 0.75.
+
+**Judge engine (optional).** With `judge` configured, a second llama-server scores
+response grouping on tiers 1-2 (NoveltyBench-style idea clusters) and the six
+judgment-dependent TTCW tests on tier 4, and the affected score terms are recomputed
+from the same formula (`scoreFromStats`) so judge and heuristics cannot drift.
+
+**Token fallback (no embedder).** Token jaccard (45%) + character bigram Dice (55%),
+similarity below 0.6 counts as distinct; the tier formulas shift to their heuristic
+weights. Every run reports which engine was active, and the report prints the semantic
+measures per prompt.
+
+**Always on:** modal share and river share (tier 1), rule adherence (tier 2), the
+weighted slop lexicon, TTCW programmatic tests, word windows, and forbidden-token checks
+(tier 5).
 
 ## Install
 
@@ -103,12 +122,17 @@ run <suite> <model>           run a specific suite on one model
 run all [suite]               every configured model, one by one
 mock [model] | mock all       synthetic runs, no model needed
 models                        list configured models
+suites                        list available suites
 teacher <model|none>          set the judge model for scored tiers
 samples <n>                   samples per prompt
 seed <n>                      reproducible runs
 setup                         guided specimen + teacher + config wizard
 clear | exit
 ```
+
+The home screen auto-loads and renders the Models Available and Suites Available tables
+on start, with a live clock in the header. Every arrow glyph is the off-white `❯`; the
+only gradient accents are the flowing AIEA wordmark, bars, spinner, and ACI number.
 
 Type a command into the `❯` input box at the bottom. The input has command-prefix
 suggestions and arrow-key history. `teacher`, `samples` and `seed` persist for the
@@ -206,18 +230,34 @@ Each run writes `results/<run-id>/`:
 This repository is developed on a weak machine that never runs models. Actual benchmark
 runs are executed on a dedicated GPU VM (typically a Colab T4): clone the repo, install
 Bun, run `bun run aiea models download <name>`, then `bun run aiea run --model <name>`.
-The `-ngl 99` default offloads all layers; on a T4 use the 2B config for comfort and the
-4B config with `runtime.ngl` lowered if memory is tight.
+
+Single-GPU budget (T4, 16 GB), worst case per run:
+
+- student model, Q4_K_M: Spark-X2.6-4B 2.62 GB / K2-Horizon-3.7B 3.25 GB / Qwen3.5-4B ~2.5 GB
+- KV cache at 8192 context: well under 1 GB
+- embedder (nomic-embed Q8_0): ~0.15 GB
+- teacher: 0 GB during generation - `judge_mode: sequential` (the default) fully releases
+  the student server before the judge loads, so two big models are never resident at the
+  same time; the judge phase runs after generation finishes
+
+Both Spark-X2.6-4B and K2-Horizon-3.7B are reasoning models and both declare enormous
+native context windows (1M and 512K); their configs pin `context: 8192` deliberately and
+disable thinking with `reasoning.effort: none`. The suite YAMLs control everything else.
 
 ## Status and honest gaps
 
 - Heuristic scoring path: implemented and smoke-tested (config loading, HF file
   resolution, metrics, planning, report and leaderboard writing).
+- Semantic scoring path: implemented (canon precompute, embeddings client, semantic
+  formulas, graceful token fallback) but never yet exercised against a live
+  llama-server; first VM session must verify the `/v1/embeddings` round trip and the
+  nomic-embed serving flags (`--embeddings --pooling mean`; older builds may want
+  `--embedding`).
+- Sequential judge phase: implemented (student released before judge loads) but
+  unverified end to end.
 - Ink interactive UI: implemented and typechecked; JSX/Ink/React render pipeline verified
   under Bun with a component probe. Full TTY walkthrough (arrow keys, config forms, live
   run screen) still needs one real-terminal session to confirm.
-- Judge path: fully wired but only exercisable once a judge model is configured; treat it
-  as unverified until then.
 - HF download path: implemented with resume-less chunked download; it has not been
   exercised on a real network run yet. First VM session should verify it.
 

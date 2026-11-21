@@ -7,6 +7,7 @@ import {
   FlowText,
   PromptInput,
   RED_DEEP,
+  Rule,
   Table,
   WHITE,
   type CommandHint,
@@ -70,25 +71,27 @@ function helpMsgs(): Msg[] {
 }
 
 const MODEL_COLUMNS: TableColumn[] = [
-  { key: "model", label: "model", width: 22 },
-  { key: "origin", label: "origin", width: 44 },
-  { key: "quant", label: "quant", width: 10 },
-  { key: "effort", label: "effort", width: 7 },
-  { key: "port", label: "port", width: 6, align: "right" },
+  { key: "model", label: "Model", width: 22 },
+  { key: "origin", label: "Origin", width: 44 },
+  { key: "quant", label: "Quant", width: 10 },
+  { key: "context", label: "Context", width: 9, align: "right" },
+  { key: "effort", label: "Effort", width: 7 },
+  { key: "port", label: "Port", width: 6, align: "right" },
 ];
 
 const SUITE_COLUMNS: TableColumn[] = [
-  { key: "suite", label: "suite", width: 14 },
-  { key: "title", label: "title", width: 30 },
-  { key: "tiers", label: "tiers", width: 6, align: "right" },
-  { key: "samples", label: "samples", width: 8, align: "right" },
-  { key: "seed", label: "seed", width: 10, align: "right" },
+  { key: "suite", label: "Suite", width: 14 },
+  { key: "title", label: "Title", width: 30 },
+  { key: "tiers", label: "Tiers", width: 6, align: "right" },
+  { key: "prompts", label: "Prompts", width: 8, align: "right" },
+  { key: "samples", label: "Samples", width: 8, align: "right" },
+  { key: "seed", label: "Seed", width: 10, align: "right" },
 ];
 
 async function buildModelsMsgs(mockMode: boolean): Promise<Msg[]> {
   if (mockMode) {
     return [
-      { kind: "section", text: "models available" },
+      { kind: "section", text: "Models Available" },
       {
         kind: "table",
         columns: MODEL_COLUMNS,
@@ -96,13 +99,14 @@ async function buildModelsMsgs(mockMode: boolean): Promise<Msg[]> {
           model: n,
           origin: "mock/hf (synthetic)",
           quant: "Q4_K_M",
+          context: "8192",
           effort: "none",
           port: "8750",
         })),
       },
     ];
   }
-  const msgs: Msg[] = [{ kind: "section", text: "models available" }];
+  const msgs: Msg[] = [{ kind: "section", text: "Models Available" }];
   try {
     const names = await listModelConfigNames();
     const rows: Array<Record<string, string>> = [];
@@ -113,6 +117,7 @@ async function buildModelsMsgs(mockMode: boolean): Promise<Msg[]> {
           model: n,
           origin: c.local_path ?? `${c.hf ?? "-"}`,
           quant: c.quant ?? "-",
+          context: String(c.runtime.context),
           effort: c.reasoning.effort,
           port: String(c.runtime.port),
         });
@@ -121,6 +126,7 @@ async function buildModelsMsgs(mockMode: boolean): Promise<Msg[]> {
           model: n,
           origin: `INVALID: ${(err as Error).message.slice(0, 40)}`,
           quant: "-",
+          context: "-",
           effort: "-",
           port: "-",
         });
@@ -134,7 +140,7 @@ async function buildModelsMsgs(mockMode: boolean): Promise<Msg[]> {
 }
 
 async function buildSuitesMsgs(): Promise<Msg[]> {
-  const msgs: Msg[] = [{ kind: "section", text: "suites available" }];
+  const msgs: Msg[] = [{ kind: "section", text: "Suites Available" }];
   try {
     const names = await listSuiteNames();
     const rows: Array<Record<string, string>> = [];
@@ -145,6 +151,7 @@ async function buildSuitesMsgs(): Promise<Msg[]> {
           suite: sc.id,
           title: sc.title,
           tiers: String(sc.tiers.filter((t) => t.enabled).length),
+          prompts: String(sc.tiers.filter((t) => t.enabled).reduce((s, t) => s + t.prompts, 0)),
           samples: String(sc.defaults.samples_per_prompt),
           seed: String(sc.defaults.seed),
         });
@@ -153,6 +160,7 @@ async function buildSuitesMsgs(): Promise<Msg[]> {
           suite: n,
           title: `INVALID: ${(err as Error).message.slice(0, 30)}`,
           tiers: "-",
+          prompts: "-",
           samples: "-",
           seed: "-",
         });
@@ -179,10 +187,6 @@ function Clock() {
       {two(d.getSeconds())}
     </Text>
   );
-}
-
-function rule(width: number): string {
-  return "─".repeat(Math.max(10, width - 2));
 }
 
 function MsgView({ m }: { m: Msg }) {
@@ -529,7 +533,7 @@ export function App({ mock }: { mock: boolean }) {
         <Box flexGrow={1} />
         <Clock />
       </Box>
-      <Text dimColor>{rule(columns)}</Text>
+      <Rule />
 
       <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
         {visible.map(([i, m]) => (

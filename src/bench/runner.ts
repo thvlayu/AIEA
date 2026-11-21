@@ -1,15 +1,23 @@
 import path from "node:path";
 import { stat } from "node:fs/promises";
 import { RESULTS_DIR, ensureDir, stamp, sanitizeName } from "../paths";
-import type { ModelConfig, ModelSampling, ModelRuntime, ReasoningEffort, SuiteConfig } from "../config/types";
+import type {
+  ModelConfig,
+  ModelRuntime,
+  ModelSampling,
+  ReasoningEffort,
+  SuiteConfig,
+} from "../config/types";
 import { applyOverrides, loadModelConfig } from "../config/load";
 import type { LlamaBinary } from "../llama/resolve";
 import { ensureModelFiles } from "../llama/hf";
 import { startServer } from "../llama/server";
 import { chat } from "../llama/client";
 import { buildPlan, type PlanItem } from "./plan";
-import { computePromptStats, type PromptStats } from "./metrics";
+import { computePromptStats, scoreFromStats, type PromptStats } from "./metrics";
 import { judgeDistinct, judgeTtcw, type JudgeClient } from "./judge";
+import { makeEmbedder, precomputeCanon, type SemanticsContext } from "../suites/creativity/semantics";
+import { TTCW_JUDGE_ONLY } from "./metrics";
 import { writeRunReport, updateLeaderboard } from "../report/report";
 
 export interface RunHooks {
@@ -126,25 +134,58 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
   const server = await startServer(binary, model, modelPath, outDir);
   log(`llama-server healthy on 127.0.0.1:${server.port} (log: ${server.logPath})`);
 
+  let embedderServer: Awaited<ReturnType<typeof startServer>> | null = null;
+  let sem: SemanticsContext | null = null;
+  if (suite.embedder) {
+    try {
+      const eFiles = await ensureModelFiles(
+        suite.embedder.hf,
+        { quant: suite.embedder.quant, file: suite.embedder.file },
+        { log, progress: (loaded, total) => hooks?.fileProgress?.({ label: "downloading embedder", loaded, total }) },
+      );
+      const eCfg: ModelConfig = {
+        ...model,
+        name: "embedder",
+        runtime: { ...model.runtime, port: suite.embedder.port, context: 2048 },
+      };
+      embedderServer = await startServer(binary, eCfg, eFiles[0]!, outDir, {
+        extraArgs: ["--embeddings", "--pooling", "mean"],
+      });
+      const embedder = makeEmbedder(suite.embedder.port, "nomic-embed");
+      const canon = await precomputeCanon(embedder);
+      sem = { embedder, canon };
+      log(`embedder healthy on 127.0.0.1:${suite.embedder.port}; semantic scoring active`);
+    } catch (err) {
+      log(`embedder unavailable (${(err as Error).message.split("\n")[0]}); token-metric fallback`);
+      sem = null;
+      if (embedderServer) {
+        await embedderServer.stop();
+        embedderServer = null;
+      }
+    }
+  } else {
+    log("no embedder configured; token-metric fallback for semantic measures");
+  }
+
   let judgeServer: Awaited<ReturnType<typeof startServer>> | null = null;
   let judge: JudgeClient | null = null;
-  if (suite.judge) {
+  const concurrentJudge = suite.judge !== null && suite.judge_mode === "concurrent";
+  if (concurrentJudge && suite.judge) {
     try {
-      const jcfgLoaded = await loadModelConfig(suite.judge.model);
-      const jcfg = applyOverrides(jcfgLoaded, opts.judgeOverrides);
+      const jcfg = applyOverrides(await loadModelConfig(suite.judge.model), opts.judgeOverrides);
       const jport = jcfg.runtime.port === model.runtime.port ? model.runtime.port + 1 : jcfg.runtime.port;
       const jModel = jcfg.local_path
         ? jcfg.local_path
         : (await ensureModelFiles(jcfg.hf!, { quant: jcfg.quant, file: jcfg.file }, { log }))[0]!;
       judgeServer = await startServer(binary, { ...jcfg, runtime: { ...jcfg.runtime, port: jport } }, jModel, outDir);
       judge = { port: judgeServer.port, sampling: jcfg.sampling, seed: runSeed + 1, label: jcfg.name };
-      log(`judge ${jcfg.name} healthy on 127.0.0.1:${judgeServer.port}`);
+      log(`judge ${jcfg.name} healthy on 127.0.0.1:${judgeServer.port} (concurrent)`);
     } catch (err) {
       log(`judge unavailable (${(err as Error).message.split("\n")[0]}); heuristic-only scoring`);
       judge = null;
     }
-  } else {
-    log("no judge configured; heuristic-only scoring");
+  } else if (suite.judge) {
+    log(`judge ${suite.judge.model} queued for sequential phase after generation`);
   }
 
   const samplesSink = Bun.file(path.join(outDir, "samples.jsonl")).writer();
@@ -165,6 +206,7 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
   let aborted = false;
   let samplesDone = 0;
   let lastTierId = "";
+  let serverStopped = false;
 
   try {
     for (const item of plan.items) {
@@ -223,7 +265,7 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
         hooks?.sampleDone?.({ tierLabel: item.tierLabel, samplesDone, samplesTotal: plan.totalSamples });
       }
       if (texts.length === 0) continue;
-      const stats = computePromptStats(item.probe, texts);
+      const stats = await computePromptStats(item.probe, texts, sem);
 
       if (judge && (item.probe.kind === "short-answer" || item.probe.kind === "uses")) {
         try {
@@ -231,18 +273,11 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
           if (jd) {
             const ratio = jd.distinctCount / texts.length;
             log(
-              `judge: ${item.probe.id} -> ${jd.distinctCount}/${texts.length} distinct (heuristic said ${stats.distinctCount})`,
+              `judge: ${item.probe.id} -> ${jd.distinctCount}/${texts.length} distinct (semantic said ${stats.distinctCount})`,
             );
             stats.distinctCount = jd.distinctCount;
             stats.distinctRatio = ratio;
-            if (item.probe.kind === "short-answer") {
-              stats.score = item.probe.id === "time-metaphor"
-                ? 0.4 * (1 - stats.modalShare) + 0.3 * (1 - stats.riverShare) + 0.3 * ratio
-                : 0.6 * (1 - stats.modalShare) + 0.4 * ratio;
-            } else {
-              stats.score = 0.5 * stats.fluency + 0.5 * ratio;
-            }
-            stats.score = Math.max(0, Math.min(1, stats.score));
+            stats.score = scoreFromStats(item.probe, stats, stats.semantic, ratio);
           }
         } catch (err) {
           log(`judge failed on ${item.probe.id}: ${(err as Error).message.split("\n")[0]}`);
@@ -269,13 +304,71 @@ export async function runSuite(opts: RunOptions): Promise<RunSummary> {
         },
       });
       log(
-        `prompt ${item.probe.id}: score ${(stats.score * 100).toFixed(1)} distinct ${stats.distinctCount}/${texts.length} modal ${(stats.modalShare * 100).toFixed(0)}% slop ${stats.slopPer100.toFixed(1)}/100w`,
+        `prompt ${item.probe.id}: score ${(stats.score * 100).toFixed(1)} distinct ${stats.distinctCount}/${texts.length} modal ${(stats.modalShare * 100).toFixed(0)}% slop ${stats.slopPer100.toFixed(1)}/100w${stats.semantic ? ` cliché ${(stats.clicheProximity * 100).toFixed(0)}%` : ""}`,
       );
+    }
+
+    if (suite.judge && suite.judge_mode === "sequential" && perPrompt.length > 0) {
+      log(`judge phase (sequential): releasing student model`);
+      await server.stop();
+      serverStopped = true;
+      try {
+        const jcfg = applyOverrides(await loadModelConfig(suite.judge.model), opts.judgeOverrides);
+        const jport = jcfg.runtime.port === model.runtime.port ? model.runtime.port + 1 : jcfg.runtime.port;
+        const jModel = jcfg.local_path
+          ? jcfg.local_path
+          : (await ensureModelFiles(jcfg.hf!, { quant: jcfg.quant, file: jcfg.file }, { log }))[0]!;
+        judgeServer = await startServer(
+          binary,
+          { ...jcfg, runtime: { ...jcfg.runtime, port: jport } },
+          jModel,
+          outDir,
+        );
+        judge = { port: judgeServer.port, sampling: jcfg.sampling, seed: runSeed + 1, label: jcfg.name };
+        log(`judge ${jcfg.name} healthy on 127.0.0.1:${jport}`);
+        for (const p of perPrompt) {
+          if (abortRef.aborted) break;
+          try {
+            if (p.item.probe.kind === "short-answer" || p.item.probe.kind === "uses") {
+              const jd = await judgeDistinct(judge, p.texts);
+              if (jd) {
+                const ratio = jd.distinctCount / p.texts.length;
+                p.stats.distinctCount = jd.distinctCount;
+                p.stats.distinctRatio = ratio;
+                p.stats.score = scoreFromStats(p.item.probe, p.stats, p.stats.semantic, ratio);
+                log(`judge: ${p.item.probe.id} -> ${jd.distinctCount}/${p.texts.length} distinct groups`);
+              }
+            } else if (p.item.probe.kind === "story") {
+              const jt = await judgeTtcw(judge, p.texts[0] ?? "");
+              if (jt) {
+                let judgePassed = 0;
+                for (const name of TTCW_JUDGE_ONLY) {
+                  if (jt[name] === true) judgePassed++;
+                }
+                p.stats.ttcwPassRatio = (p.stats.ttcwProgrammatic + judgePassed) / (8 + TTCW_JUDGE_ONLY.length);
+                p.stats.score = scoreFromStats(p.item.probe, p.stats, p.stats.semantic, null);
+                log(`judge ttcw: ${p.item.probe.id} -> ${judgePassed}/${TTCW_JUDGE_ONLY.length} judge tests pass`);
+              }
+            }
+          } catch (err) {
+            log(`judge failed on ${p.item.probe.id}: ${(err as Error).message.split("\n")[0]}`);
+          }
+          for (const tier of tiersById.values()) {
+            const tierStats = perPrompt.filter((x) => x.item.tierId === tier.id);
+            if (tierStats.length > 0) {
+              tier.score = tierStats.reduce((s, x) => s + x.stats.score, 0) / tierStats.length;
+            }
+          }
+        }
+      } catch (err) {
+        log(`judge phase failed (${(err as Error).message.split("\n")[0]}); keeping student-side scores`);
+      }
     }
   } finally {
     await samplesSink.end();
-    await server.stop();
+    if (!serverStopped) await server.stop();
     if (judgeServer) await judgeServer.stop();
+    if (embedderServer) await embedderServer.stop();
   }
 
   const enabled = [...tiersById.values()];

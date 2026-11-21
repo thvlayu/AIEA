@@ -18,6 +18,33 @@ interface ChatApiResponse {
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
+interface EmbeddingsResponse {
+  data?: Array<{ embedding?: number[] }>;
+}
+
+export async function embeddings(
+  port: number,
+  inputs: string[],
+  signal?: AbortSignal,
+): Promise<number[][]> {
+  const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    signal,
+    body: JSON.stringify({ input: inputs }),
+  });
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 200);
+    throw new Error(`embeddings returned HTTP ${res.status}: ${body}`);
+  }
+  const data = (await res.json()) as EmbeddingsResponse;
+  const arr = data.data ?? [];
+  if (arr.length !== inputs.length) {
+    throw new Error(`embeddings count mismatch: got ${arr.length} for ${inputs.length} inputs`);
+  }
+  return arr.map((d) => d.embedding ?? []);
+}
+
 export async function chat(
   port: number,
   messages: ChatMessage[],

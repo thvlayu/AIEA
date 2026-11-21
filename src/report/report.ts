@@ -62,6 +62,13 @@ export async function writeRunReport(
   lines.push(`- modal answer share (mean over t1 probes): ${pct(summary.modalShare)}%`);
   lines.push(`- time-is-a-river cluster share: ${pct(summary.riverShare)}%`);
   lines.push(`- slop density (weighted hits per 100 words, mean): ${summary.slopPer100.toFixed(2)}`);
+  const semStats = summary.perPrompt.map((p) => p.stats).filter((s) => s.semantic);
+  if (semStats.length > 0) {
+    lines.push(
+      `- cliche proximity (mean over semantic prompts): ${pct(semStats.reduce((a, b) => a + b.clicheProximity, 0) / semStats.length)}%`,
+    );
+    lines.push(`- semantic scoring active for ${semStats.length}/${summary.perPrompt.length} prompts`);
+  }
   lines.push("");
 
   lines.push(`## Per prompt`);
@@ -78,6 +85,14 @@ export async function writeRunReport(
       lines.push(`- modal share: ${pct(stats.modalShare)}% (top: ${stats.modalLabel})`);
       if (item.probe.id === "time-metaphor") {
         lines.push(`- river cluster share: ${pct(stats.riverShare)}%`);
+      }
+    }
+    if (stats.semantic) {
+      lines.push(`- cliche proximity: ${pct(stats.clicheProximity)}%`);
+      lines.push(`- semantic diversity: ${pct(stats.semDiversity)}% (min pair dist ${pct(stats.minPairDist)}%)`);
+      lines.push(`- slop similarity: ${pct(stats.slopSim)}%`);
+      if (item.probe.kind === "uses") {
+        lines.push(`- flexibility: ${pct(stats.flexibility)}% | originality: ${pct(stats.originality)}% | elaboration: ${pct(stats.elaboration)}%`);
       }
     }
     if (item.probe.kind === "word-list") {

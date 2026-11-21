@@ -10,6 +10,13 @@ import {
   splitSentences,
   SEED_WORDS,
 } from "../suites/creativity/checks";
+import {
+  clusterCount,
+  maxSimToSet,
+  meanPairwiseDistance,
+  minPairwiseDistance,
+  type SemanticsContext,
+} from "../suites/creativity/semantics";
 
 export function tokenize(text: string): string[] {
   return text.toLowerCase().match(/[a-z0-9'’-]+/g) ?? [];
@@ -137,10 +144,7 @@ export function modalShare(texts: string[], probe: Probe): ModalStats {
     }
     const sizes = [...counts.entries()]
       .map(([k, c]) => ({
-        label:
-          k >= 0
-            ? probe.clusterLabels?.[k] ?? `cluster-${k}`
-            : `other-${Math.abs(k)}`,
+        label: k >= 0 ? probe.clusterLabels?.[k] ?? `cluster-${k}` : `other-${Math.abs(k)}`,
         count: c,
       }))
       .sort((a, b) => b.count - a.count);
@@ -253,6 +257,7 @@ export interface PromptStats {
   probeId: string;
   label: string;
   score: number;
+  semantic: boolean;
   distinctRatio: number;
   distinctCount: number;
   meanPairSim: number;
@@ -265,9 +270,17 @@ export interface PromptStats {
   adherence: number;
   elementsPresentRatio: number;
   ttcwPassRatio: number;
+  ttcwProgrammatic: number;
   windowOk: number;
   conceptMentionRatio: number;
   wordCountMean: number;
+  clicheProximity: number;
+  semDiversity: number;
+  minPairDist: number;
+  slopSim: number;
+  flexibility: number;
+  originality: number;
+  elaboration: number;
 }
 
 function mean(xs: number[]): number {
@@ -278,7 +291,84 @@ function clamp01(x: number): number {
   return Math.max(0, Math.min(1, x));
 }
 
-export function computePromptStats(probe: Probe, texts: string[]): PromptStats {
+export function scoreFromStats(
+  probe: Probe,
+  stats: PromptStats,
+  semantic: boolean,
+  distinctOverride: number | null,
+): number {
+  const distinct = distinctOverride ?? stats.distinctRatio;
+  let s = 0;
+  switch (probe.kind) {
+    case "short-answer": {
+      if (probe.id === "time-metaphor") {
+        if (semantic) {
+          s = 0.35 * (1 - stats.modalShare) + 0.35 * (1 - stats.clicheProximity) + 0.3 * stats.semDiversity;
+        } else {
+          s = 0.4 * (1 - stats.modalShare) + 0.3 * (1 - stats.riverShare) + 0.3 * distinct;
+        }
+      } else {
+        s = semantic
+          ? 0.5 * (1 - stats.modalShare) + 0.5 * stats.semDiversity
+          : 0.6 * (1 - stats.modalShare) + 0.4 * distinct;
+      }
+      break;
+    }
+    case "uses": {
+      if (semantic) {
+        s = 0.25 * stats.fluency + 0.25 * stats.flexibility + 0.3 * stats.originality + 0.2 * stats.elaboration;
+      } else {
+        s = 0.5 * stats.fluency + 0.5 * distinct;
+      }
+      break;
+    }
+    case "word-list": {
+      if (semantic) {
+        s = 0.3 * stats.adherence + 0.5 * stats.semDiversity + 0.2 * stats.minPairDist;
+      } else {
+        s = 0.6 * stats.adherence + 0.4 * (0.5 * stats.fluency + 0.5 * distinct);
+      }
+      break;
+    }
+    case "prose": {
+      const slopTerm = 1 - Math.min(1, stats.slopPer100 / 8);
+      s = semantic ? 0.6 * slopTerm + 0.4 * (1 - stats.slopSim) : slopTerm;
+      break;
+    }
+    case "story": {
+      if (semantic) {
+        s =
+          0.3 * stats.elementsPresentRatio +
+          0.35 * stats.ttcwPassRatio +
+          0.15 * stats.windowOk +
+          0.1 * stats.semDiversity +
+          0.1 * (1 - stats.slopSim);
+      } else {
+        s = 0.4 * stats.elementsPresentRatio + 0.4 * stats.ttcwPassRatio + 0.2 * stats.windowOk;
+      }
+      break;
+    }
+    case "piece": {
+      if (semantic) {
+        s =
+          0.35 * stats.conceptMentionRatio +
+          0.25 * (1 - Math.min(1, stats.slopPer100 / 8)) +
+          0.15 * stats.windowOk +
+          0.25 * stats.semDiversity;
+      } else {
+        s = 0.5 * stats.conceptMentionRatio + 0.3 * (1 - Math.min(1, stats.slopPer100 / 8)) + 0.2 * stats.windowOk;
+      }
+      break;
+    }
+  }
+  return clamp01(s);
+}
+
+export async function computePromptStats(
+  probe: Probe,
+  texts: string[],
+  sem: SemanticsContext | null = null,
+): Promise<PromptStats> {
   const dist = distinctStats(texts);
   const slops = texts.map(slopStats);
   const slopPer100 = mean(slops.map((s) => s.per100));
@@ -292,6 +382,7 @@ export function computePromptStats(probe: Probe, texts: string[]): PromptStats {
     probeId: probe.id,
     label: probe.label,
     score: 0,
+    semantic: false,
     distinctRatio: dist.distinctRatio,
     distinctCount: dist.distinctCount,
     meanPairSim: dist.meanPairSim,
@@ -304,84 +395,103 @@ export function computePromptStats(probe: Probe, texts: string[]): PromptStats {
     adherence: 1,
     elementsPresentRatio: 0,
     ttcwPassRatio: 0,
+    ttcwProgrammatic: 0,
     windowOk: 1,
     conceptMentionRatio: 0,
     wordCountMean,
+    clicheProximity: 0,
+    semDiversity: 0,
+    minPairDist: 0,
+    slopSim: 0,
+    flexibility: 0,
+    originality: 0,
+    elaboration: 0,
   };
 
   switch (probe.kind) {
-    case "short-answer": {
-      if (probe.id === "time-metaphor") {
-        stats.score = 0.4 * (1 - modal.share) + 0.3 * (1 - river) + 0.3 * dist.distinctRatio;
-      } else {
-        stats.score = 0.6 * (1 - modal.share) + 0.4 * dist.distinctRatio;
-      }
+    case "short-answer":
       stats.fluency = texts.length;
       break;
-    }
     case "uses": {
       const usesList = texts.map(checkUses);
-      const fluency = mean(usesList.map((u) => clamp01(u.uses / 8)));
-      const lineDistinct = distinctStats(usesList.flatMap((u) => u.lines.slice(0, 16)));
-      stats.fluency = fluency;
-      stats.score = 0.5 * fluency + 0.5 * lineDistinct.distinctRatio;
+      stats.fluency = mean(usesList.map((u) => clamp01(u.uses / 8)));
       break;
     }
     case "word-list": {
       const letter = probe.letter ?? "b";
       const checks = texts.map((t) => checkWordList(t, letter, SEED_WORDS));
-      const counts = checks.map((c) => c.count);
-      const adherence = mean(
-        checks.map((c) => clamp01(1 - (c.badLetter + c.repeats + c.seedHits + c.properNounLike) / Math.max(1, c.count))),
+      stats.adherence = mean(
+        checks.map((c) =>
+          clamp01(1 - (c.badLetter + c.repeats + c.seedHits + c.properNounLike) / Math.max(1, c.count)),
+        ),
       );
-      const uniq = mean(counts.map((c) => c / Math.max(1, c)));
-      const fluency = mean(counts.map((c) => clamp01(c / 25)));
-      stats.fluency = fluency;
-      stats.adherence = adherence;
-      const distinctWords = distinctStats(texts).distinctRatio;
-      stats.score = 0.6 * adherence + 0.4 * (0.5 * fluency + 0.5 * distinctWords);
-      break;
-    }
-    case "prose": {
-      stats.score = clamp01(1 - slopPer100 / 8);
+      stats.fluency = mean(checks.map((c) => clamp01(c.count / 25)));
       break;
     }
     case "story": {
       if (probe.elements) {
         const storyChecks = texts.map((t) => checkStory(t, probe.elements!, probe.wordTarget ?? null));
-        stats.elementsPresentRatio = mean(storyChecks.map((c) => c.total > 0 ? c.present / c.total : 0));
-        const winOk = storyChecks.map((c) => (c.windowOk ? 1 : 0));
-        stats.windowOk = mean(winOk);
-      } else {
-        stats.elementsPresentRatio = 0;
+        stats.elementsPresentRatio = mean(storyChecks.map((c) => (c.total > 0 ? c.present / c.total : 0)));
+        stats.windowOk = mean(storyChecks.map((c) => (c.windowOk ? 1 : 0)));
       }
       const ttcw = texts.map((t) => ttcwChecks(t, probe.wordTarget ?? null));
-      const passRates = ttcw.map((checks) => {
-        const real = checks.filter((c) => !c.judgeOnly);
-        const passed = real.filter((c) => c.pass).length;
-        return real.length > 0 ? passed / real.length : 0;
-      });
-      stats.ttcwPassRatio = mean(passRates);
-      stats.score =
-        0.4 * stats.elementsPresentRatio + 0.4 * stats.ttcwPassRatio + 0.2 * stats.windowOk;
+      const real = ttcw[0]?.filter((c) => !c.judgeOnly) ?? [];
+      stats.ttcwProgrammatic = mean(
+        ttcw.map((checks) => {
+          const prog = checks.filter((c) => !c.judgeOnly);
+          return prog.filter((c) => c.pass).length;
+        }),
+      );
+      stats.ttcwPassRatio = mean(
+        ttcw.map((checks) => {
+          const prog = checks.filter((c) => !c.judgeOnly);
+          return prog.length > 0 ? prog.filter((c) => c.pass).length / prog.length : 0;
+        }),
+      );
+      void real;
       break;
     }
     case "piece": {
-      const mentions = texts.map((t) =>
-        checkMentions(t, probe.mentions ?? [], probe.forbid ?? []),
-      );
+      const mentions = texts.map((t) => checkMentions(t, probe.mentions ?? [], probe.forbid ?? []));
       stats.conceptMentionRatio = mean(mentions.map((m) => m.mentionRatio));
-      let windowOk = 1;
       if (probe.wordTarget) {
         const [lo, hi] = probe.wordTarget;
-        windowOk = mean(words.map((w) => (w >= lo * 0.85 && w <= hi * 1.15 ? 1 : 0)));
+        stats.windowOk = mean(words.map((w) => (w >= lo * 0.85 && w <= hi * 1.15 ? 1 : 0)));
       }
-      stats.windowOk = windowOk;
-      stats.score =
-        0.5 * stats.conceptMentionRatio + 0.3 * clamp01(1 - slopPer100 / 8) + 0.2 * windowOk;
       break;
     }
   }
-  stats.score = clamp01(stats.score);
+
+  if (sem && texts.length > 0) {
+    try {
+      const vecs = await sem.embedder.embed(texts);
+      stats.semantic = true;
+      stats.distinctCount = clusterCount(vecs);
+      stats.distinctRatio = stats.distinctCount / texts.length;
+      stats.semDiversity = clamp01(meanPairwiseDistance(vecs) / 0.8);
+      stats.minPairDist = clamp01(minPairwiseDistance(vecs) / 0.8);
+      stats.clicheProximity = mean(vecs.map((v) => maxSimToSet(v, sem.canon.timeVecs.map((e) => e.vec))));
+      stats.slopSim = mean(vecs.map((v) => maxSimToSet(v, sem.canon.slopVecs)));
+      if (probe.kind === "uses") {
+        const lines = texts.flatMap((t) => checkUses(t).lines.slice(0, 12));
+        if (lines.length > 0) {
+          const lineVecs = await sem.embedder.embed(lines);
+          const typical = sem.canon.typical[probe.id];
+          if (typical && typical.length > 0) {
+            stats.originality = clamp01(1 - mean(lineVecs.map((v) => maxSimToSet(v, typical))));
+          }
+          stats.flexibility = clamp01(clusterCount(lineVecs, 0.7) / 8);
+          stats.elaboration = clamp01(mean(lines.map((l) => countWords(l))) / 12);
+        }
+      }
+      if (probe.kind === "short-answer" && probe.id !== "time-metaphor") {
+        stats.clicheProximity = 0;
+      }
+    } catch {
+      stats.semantic = false;
+    }
+  }
+
+  stats.score = scoreFromStats(probe, stats, stats.semantic, null);
   return stats;
 }

@@ -6,8 +6,22 @@ defaults:
   max_tokens: 512
 
 # Optional judge slot: set judge.model to another model config name (a second
-# llama-server will be spawned). Leave null for heuristic-only scoring.
+# llama-server will be spawned). Leave null for heuristic + semantic scoring.
 judge: null
+
+# sequential: student model is fully released before the judge loads (single-GPU safe, T4)
+# concurrent: judge runs alongside the student (needs VRAM for both)
+judge_mode: sequential
+
+# Semantic scoring engine: a small embedding model served by llama.cpp
+# (--embeddings --pooling mean). Measures cliche proximity, semantic diversity,
+# AUT originality via distance-from-typical-uses (SemDis method), DAT-style
+# pairwise distance. ~150 MB in Q8_0; if it fails to start, the suite falls
+# back to token-level metrics.
+embedder:
+  hf: nomic-ai/nomic-embed-text-v1.5-GGUF
+  quant: Q8_0
+  port: 8752
 
 output_dir: results
 

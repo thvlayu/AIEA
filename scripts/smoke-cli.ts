@@ -8,6 +8,7 @@ import { resolveLlama } from "../src/llama/resolve";
 import { distinctStats, computePromptStats } from "../src/bench/metrics";
 import { slopStats } from "../src/suites/creativity/checks";
 import { tierPrompts } from "../src/suites/creativity/prompts";
+import { TIME_CANON, TYPICAL_USES, SLOP_EXEMPLARS } from "../src/suites/creativity/canon";
 import { buildPlan } from "../src/bench/plan";
 import { runMockFlat } from "../src/ink/flat-mock";
 import { writeRunReport, updateLeaderboard } from "../src/report/report";
@@ -134,9 +135,22 @@ async function main(): Promise<void> {
     "Time is a locked filing cabinet.",
     "Time is an unpaid invoice.",
   ];
-  const stats = computePromptStats(timeProbe, collapsed);
+  const stats = await computePromptStats(timeProbe, collapsed);
+  ok(stats.semantic === false, "token fallback active without embedder");
   ok(stats.riverShare === 0.6, "river cluster share 3/5", String(stats.riverShare));
   ok(stats.modalShare >= 0.6, "modal share catches collapse", String(stats.modalShare));
+
+  const canonClusters = TIME_CANON.length;
+  ok(canonClusters >= 8, "time canon clusters present", String(canonClusters));
+  const auIds = tierPrompts("t2_constrained_divergence")
+    .filter((p) => p.kind === "uses")
+    .map((p) => p.id);
+  ok(
+    auIds.every((id) => TYPICAL_USES[id] !== undefined && TYPICAL_USES[id]!.length >= 8),
+    "typical-uses canon covers every AUT probe",
+    auIds.join(","),
+  );
+  ok(SLOP_EXEMPLARS.length >= 8, "slop exemplar sentences present", String(SLOP_EXEMPLARS.length));
 
   const binary = resolveLlama();
   if (binary) {

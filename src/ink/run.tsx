@@ -7,6 +7,7 @@ import {
   GradientText,
   Kv,
   RED_DEEP,
+  Rule,
   Spinner,
   Table,
   WHITE,
@@ -141,10 +142,6 @@ function fmtElapsed(ms: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
-function rule(width: number): string {
-  return "─".repeat(Math.max(10, width - 2));
-}
-
 export function RunScreen({
   setup,
   engine,
@@ -156,7 +153,7 @@ export function RunScreen({
   onDone: (s: RunSummary) => void;
   onExit: () => void;
 }) {
-  const { columns, rows } = useWindowSize();
+  const { rows } = useWindowSize();
   const store = useMemo(() => new RunStore(setup), [setup]);
   useRunStore(store);
   const [, forceTick] = useReducer((x: number) => x + 1, 0);
@@ -222,7 +219,7 @@ export function RunScreen({
         <Box flexGrow={1} />
         <Text dimColor>teacher {setup.teacher?.name ?? "none"}</Text>
       </Box>
-      <Text dimColor>{rule(columns)}</Text>
+      <Rule />
 
       <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
         {store.tiers.map((t) => (
@@ -325,7 +322,7 @@ export function SummaryScreen({
   mock: boolean;
   onExit: () => void;
 }) {
-  const { columns, rows } = useWindowSize();
+  const { rows } = useWindowSize();
   useInput((input, key) => {
     if (key.return || input === "q" || key.escape) onExit();
   });
@@ -345,7 +342,7 @@ export function SummaryScreen({
         <Box flexGrow={1} />
         <Text dimColor>enter to continue</Text>
       </Box>
-      <Text dimColor>{rule(columns)}</Text>
+      <Rule />
 
       <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
         <Box gap={2}>
