@@ -1,46 +1,440 @@
-import { useState } from "react";
-import { render, Text, useApp } from "ink";
+import { useRef, useState } from "react";
+import { Box, Text, render, useApp, useWindowSize } from "ink";
+import {
+  Arrow,
+  GRAY,
+  GradientText,
+  PromptInput,
+  RED_DEEP,
+  Table,
+  WHITE,
+  type CommandHint,
+  type TableColumn,
+} from "./components";
 import { SetupFlow } from "./setup";
 import { RunScreen, SummaryScreen } from "./run";
-import { createMockEngine, createRealEngine, type SetupResult } from "./engine";
+import { createMockEngine, createRealEngine, mockStudentCfg, type SetupResult } from "./engine";
 import type { RunSummary } from "../bench/runner";
+import { listModelConfigNames, loadModelConfig, loadSuiteConfig } from "../config/load";
+import type { ModelConfig } from "../config/types";
 
-function App({ mock }: { mock: boolean }) {
+const MOCK_MODELS = ["mock-student-4b", "mock-student-2b"];
+
+const COMMANDS: CommandHint[] = [
+  { name: "help", usage: "help" },
+  { name: "run", usage: "run <model> | run <suite> <model> | run all [suite]" },
+  { name: "mock", usage: "mock [model] | mock all   (synthetic, no model)" },
+  { name: "models", usage: "models" },
+  { name: "teacher", usage: "teacher <model|none>   judge for scored tiers" },
+  { name: "samples", usage: "samples <n>   samples per prompt" },
+  { name: "seed", usage: "seed <n>" },
+  { name: "setup", usage: "setup   guided specimen + teacher + config" },
+  { name: "clear", usage: "clear" },
+  { name: "exit", usage: "exit" },
+];
+
+type Msg =
+  | { kind: "text"; text: string; dim?: boolean }
+  | { kind: "cmd"; cmd: string; rest?: string }
+  | { kind: "error"; text: string }
+  | { kind: "aci"; model: string; aci: number; note?: string }
+  | { kind: "table"; columns: TableColumn[]; rows: Array<Record<string, string>> }
+  | { kind: "spacer" };
+
+function welcomeMsgs(): Msg[] {
+  return [
+    { kind: "text", text: "creativity benchmark runner for local llama.cpp models", dim: true },
+    { kind: "spacer" },
+    { kind: "cmd", cmd: "run", rest: "creativity qwen3.5-4b-q4" },
+    { kind: "cmd", cmd: "run", rest: "all" },
+    { kind: "cmd", cmd: "mock", rest: "(synthetic preview, no model needed)" },
+    { kind: "cmd", cmd: "help", rest: "all commands" },
+    { kind: "spacer" },
+  ];
+}
+
+function helpMsgs(): Msg[] {
+  return [
+    { kind: "cmd", cmd: "run", rest: "<model> | run <suite> <model> | run all [suite]" },
+    { kind: "cmd", cmd: "mock", rest: "[model] | mock all   (synthetic, no model)" },
+    { kind: "cmd", cmd: "models", rest: "list configured models" },
+    { kind: "cmd", cmd: "teacher", rest: "<model|none>   judge model for scored tiers" },
+    { kind: "cmd", cmd: "samples", rest: "<n>   samples per prompt" },
+    { kind: "cmd", cmd: "seed", rest: "<n>   reproducible runs" },
+    { kind: "cmd", cmd: "setup", rest: "guided specimen + teacher + config" },
+    { kind: "cmd", cmd: "clear", rest: undefined },
+    { kind: "cmd", cmd: "exit", rest: undefined },
+    { kind: "text", text: "teacher, samples and seed persist for this session only", dim: true },
+  ];
+}
+
+function rule(width: number): string {
+  return "─".repeat(Math.max(10, width - 2));
+}
+
+function MsgView({ m }: { m: Msg }) {
+  switch (m.kind) {
+    case "text":
+      return (
+        <Text color={m.dim ? GRAY : WHITE} dimColor={m.dim}>
+          {m.text}
+        </Text>
+      );
+    case "cmd":
+      return (
+        <Box gap={1}>
+          <Arrow />
+          <Text color="white">{m.cmd}</Text>
+          {m.rest ? <Text color={GRAY}>{m.rest}</Text> : null}
+        </Box>
+      );
+    case "error":
+      return (
+        <Box gap={1}>
+          <Arrow />
+          <Text color={RED_DEEP}>{m.text}</Text>
+        </Box>
+      );
+    case "aci":
+      return (
+        <Box gap={1}>
+          <Arrow />
+          <Text color="white">{m.model}</Text>
+          <GradientText text={m.aci.toFixed(1)} bold />
+          <Text dimColor>{m.note ?? "/ 100 ACI"}</Text>
+        </Box>
+      );
+    case "table":
+      return <Table columns={m.columns} rows={m.rows} />;
+    case "spacer":
+      return <Text> </Text>;
+  }
+}
+
+export function App({ mock }: { mock: boolean }) {
   const { exit } = useApp();
-  const [phase, setPhase] = useState<"setup" | "run" | "summary">("setup");
+  const { columns, rows } = useWindowSize();
+  const [mode, setMode] = useState<"home" | "setup" | "run" | "summary">("home");
+  const [msgs, setMsgs] = useState<Msg[]>(welcomeMsgs());
   const [setup, setSetup] = useState<SetupResult | null>(null);
   const [summary, setSummary] = useState<RunSummary | null>(null);
 
-  if (phase === "setup") {
+  const teacherRef = useRef<string | null>(null);
+  const samplesRef = useRef<number | null>(null);
+  const seedRef = useRef<number | null>(null);
+  const suiteRef = useRef<string>("creativity");
+  const queueRef = useRef<string[]>([]);
+  const summaryRef = useRef<RunSummary | null>(null);
+
+  const push = (m: Msg | Msg[]) => setMsgs((prev) => [...prev, ...(Array.isArray(m) ? m : [m])]);
+
+  async function startRunFor(modelName: string, suiteName: string, isMock: boolean): Promise<void> {
+    try {
+      const mcfg = isMock ? mockStudentCfg(modelName) : await loadModelConfig(modelName);
+      const suite = await loadSuiteConfig(suiteName);
+      let teacher: ModelConfig | null = null;
+      if (!isMock && teacherRef.current) {
+        teacher = await loadModelConfig(teacherRef.current);
+      }
+      const result: SetupResult = {
+        mock: isMock,
+        model: mcfg,
+        suite: teacher ? { ...suite, judge: { model: teacher.name } } : { ...suite, judge: null },
+        teacher,
+        samples: samplesRef.current ?? suite.defaults.samples_per_prompt,
+        seed: seedRef.current ?? suite.defaults.seed,
+        judgeOverrides: teacher
+          ? {
+              sampling: teacher.sampling,
+              runtime: { port: teacher.runtime.port },
+              reasoning: { effort: teacher.reasoning.effort },
+            }
+          : undefined,
+      };
+      setSetup(result);
+      setMode("run");
+    } catch (err) {
+      push({ kind: "error", text: (err as Error).message.split("\n")[0] ?? "run failed" });
+      advanceQueue();
+    }
+  }
+
+  function advanceQueue(): void {
+    const next = queueRef.current.shift();
+    if (next) {
+      push({
+        kind: "text",
+        text: `next: ${next}${queueRef.current.length > 0 ? ` (${queueRef.current.length} left in queue)` : ""}`,
+        dim: true,
+      });
+      void startRunFor(next, suiteRef.current, mock);
+    } else {
+      setMode("home");
+    }
+  }
+
+  function afterSummary(): void {
+    const s = summaryRef.current;
+    if (s) {
+      push({ kind: "aci", model: s.model, aci: s.aci, note: s.aborted ? "/ 100 ACI (aborted)" : undefined });
+      if (s.aborted) queueRef.current = [];
+    }
+    advanceQueue();
+  }
+
+  async function exec(raw: string): Promise<void> {
+    const line = raw.trim();
+    if (!line) return;
+    const parts = line.split(/\s+/);
+    const cmd = parts[0]!.toLowerCase();
+    const rest = parts.slice(1);
+
+    switch (cmd) {
+      case "help": {
+        push(helpMsgs());
+        return;
+      }
+      case "models": {
+        if (mock) {
+          push({
+            kind: "table",
+            columns: [
+              { key: "model", label: "model", width: 22 },
+              { key: "origin", label: "origin", width: 24 },
+              { key: "quant", label: "quant", width: 9 },
+              { key: "effort", label: "effort", width: 7 },
+            ],
+            rows: MOCK_MODELS.map((n) => ({ model: n, origin: "mock/hf (synthetic)", quant: "Q4_K_M", effort: "none" })),
+          });
+          return;
+        }
+        try {
+          const names = await listModelConfigNames();
+          const rows: Array<Record<string, string>> = [];
+          for (const n of names) {
+            try {
+              const c = await loadModelConfig(n);
+              rows.push({
+                model: n,
+                origin: c.local_path ?? `${c.hf ?? "-"}`,
+                quant: c.quant ?? "-",
+                effort: c.reasoning.effort,
+                port: String(c.runtime.port),
+              });
+            } catch (err) {
+              rows.push({ model: n, origin: `INVALID: ${(err as Error).message.slice(0, 40)}`, quant: "-", effort: "-", port: "-" });
+            }
+          }
+          push({
+            kind: "table",
+            columns: [
+              { key: "model", label: "model", width: 22 },
+              { key: "origin", label: "origin", width: 44 },
+              { key: "quant", label: "quant", width: 10 },
+              { key: "effort", label: "effort", width: 7 },
+              { key: "port", label: "port", width: 6, align: "right" },
+            ],
+            rows,
+          });
+        } catch (err) {
+          push({ kind: "error", text: (err as Error).message });
+        }
+        return;
+      }
+      case "run":
+      case "mock": {
+        const isMock = cmd === "mock" || mock;
+        if (rest.length === 0) {
+          push({ kind: "error", text: "run needs arguments. try: run <model> | run <suite> <model> | run all [suite]" });
+          return;
+        }
+        if (rest[0]!.toLowerCase() === "all") {
+          const suiteName = rest[1] ?? "creativity";
+          try {
+            await loadSuiteConfig(suiteName);
+          } catch (err) {
+            push({ kind: "error", text: (err as Error).message.split("\n")[0] ?? "suite missing" });
+            return;
+          }
+          const names = isMock ? MOCK_MODELS : await listModelConfigNames();
+          if (names.length === 0) {
+            push({ kind: "error", text: "no model configs found in configs/models/" });
+            return;
+          }
+          suiteRef.current = suiteName;
+          queueRef.current = names.slice(1);
+          push({
+            kind: "text",
+            text: `running ${names.length} model${names.length > 1 ? "s" : ""} one by one on suite ${suiteName}`,
+            dim: true,
+          });
+          void startRunFor(names[0]!, suiteName, isMock);
+          return;
+        }
+        let modelName: string;
+        let suiteName: string;
+        if (rest.length >= 2) {
+          suiteName = rest[0]!;
+          modelName = rest[1]!;
+        } else {
+          const one = rest[0]!;
+          let isSuite = false;
+          try {
+            await loadSuiteConfig(one);
+            isSuite = true;
+          } catch {
+            isSuite = false;
+          }
+          if (isSuite) {
+            push({ kind: "error", text: `"${one}" is a suite. give a model too: run ${one} <model>` });
+            return;
+          }
+          modelName = one;
+          suiteName = "creativity";
+        }
+        if (isMock && !MOCK_MODELS.includes(modelName)) {
+          push({ kind: "text", text: `mock has no model "${modelName}"; using ${MOCK_MODELS[0]}`, dim: true });
+          modelName = MOCK_MODELS[0]!;
+        }
+        suiteRef.current = suiteName;
+        queueRef.current = [];
+        void startRunFor(modelName, suiteName, isMock);
+        return;
+      }
+      case "teacher": {
+        const arg = rest[0];
+        if (!arg) {
+          push({ kind: "text", text: `teacher is ${teacherRef.current ?? "none"}`, dim: true });
+          return;
+        }
+        if (arg.toLowerCase() === "none") {
+          teacherRef.current = null;
+          push({ kind: "text", text: "teacher set to none (heuristic-only scoring)" });
+          return;
+        }
+        if (mock) {
+          teacherRef.current = arg;
+          push({ kind: "text", text: `teacher set to ${arg} (mock)` });
+          return;
+        }
+        try {
+          await loadModelConfig(arg);
+          teacherRef.current = arg;
+          push({ kind: "text", text: `teacher set to ${arg}` });
+        } catch {
+          push({ kind: "error", text: `no model config "${arg}" in configs/models/` });
+        }
+        return;
+      }
+      case "samples": {
+        const n = parseInt(rest[0] ?? "", 10);
+        if (!Number.isFinite(n) || n < 1) {
+          push({ kind: "error", text: "samples needs a positive integer: samples 5" });
+          return;
+        }
+        samplesRef.current = Math.min(50, n);
+        push({ kind: "text", text: `samples per prompt set to ${samplesRef.current}` });
+        return;
+      }
+      case "seed": {
+        const n = parseInt(rest[0] ?? "", 10);
+        if (!Number.isFinite(n)) {
+          push({ kind: "error", text: "seed needs an integer: seed 42" });
+          return;
+        }
+        seedRef.current = n;
+        push({ kind: "text", text: `seed set to ${n}` });
+        return;
+      }
+      case "setup": {
+        setMode("setup");
+        return;
+      }
+      case "clear": {
+        setMsgs(welcomeMsgs());
+        return;
+      }
+      case "exit":
+      case "quit": {
+        exit();
+        return;
+      }
+      default: {
+        push({ kind: "error", text: `unknown command "${cmd}". type help` });
+        return;
+      }
+    }
+  }
+
+  if (mode === "setup") {
     return (
       <SetupFlow
         mock={mock}
         onDone={(r) => {
           setSetup(r);
-          setPhase("run");
+          setMode("run");
         }}
-        onCancel={() => exit()}
+        onCancel={() => setMode("home")}
       />
     );
   }
-  if (phase === "run" && setup) {
+
+  if (mode === "run" && setup) {
     const engine = setup.mock ? createMockEngine(setup.seed) : createRealEngine(setup);
     return (
       <RunScreen
         setup={setup}
         engine={engine}
         onDone={(s) => {
+          summaryRef.current = s;
           setSummary(s);
-          setPhase("summary");
+          setMode("summary");
         }}
-        onExit={() => exit()}
+        onExit={() => {
+          queueRef.current = [];
+          setMode("home");
+        }}
       />
     );
   }
-  if (phase === "summary" && summary && setup) {
-    return <SummaryScreen summary={summary} mock={setup.mock} onExit={() => exit()} />;
+
+  if (mode === "summary" && summary) {
+    return <SummaryScreen summary={summary} mock={setup?.mock ?? mock} onExit={afterSummary} />;
   }
-  return <Text dimColor>waiting for state...</Text>;
+
+  const budget = Math.max(4, rows - 10);
+  let used = 0;
+  const visible: Array<[number, Msg]> = [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]!;
+    const cost = m.kind === "table" ? m.rows.length + 3 : m.kind === "spacer" ? 2 : 1;
+    if (used + cost > budget && visible.length > 0) break;
+    used += cost;
+    visible.unshift([i, m]);
+  }
+
+  return (
+    <Box flexDirection="column" height={rows} overflow="hidden">
+      <Box gap={2}>
+        <GradientText text="AIEA" bold />
+        <Text dimColor>Asa Intelligence Evaluation and Analysis</Text>
+        <Box flexGrow={1} />
+        <Text dimColor>
+          {mock ? "mock | " : ""}teacher {teacherRef.current ?? "none"} | samples {samplesRef.current ?? 5} | seed{" "}
+          {seedRef.current ?? 20260101}
+        </Text>
+      </Box>
+      <Text dimColor>{rule(columns)}</Text>
+
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
+        {visible.map(([i, m]) => (
+          <MsgView key={i} m={m} />
+        ))}
+      </Box>
+
+      <PromptInput commands={COMMANDS} onSubmit={(t) => void exec(t)} placeholder="type a command (help)" />
+    </Box>
+  );
 }
 
 export async function runApp(mock: boolean): Promise<void> {

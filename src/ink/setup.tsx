@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
-import { Text } from "ink";
-import { ConfigForm, Frame, Kv, SelectList, type FormField } from "./components";
+import { Box, Text } from "ink";
+import { ConfigForm, GRAY, Kv, RED_DEEP, SelectList, WHITE, type FormField } from "./components";
 import { applyOverrides, listModelConfigNames, loadModelConfig, loadSuiteConfig } from "../config/load";
 import type { ModelConfig, ReasoningEffort, SuiteConfig } from "../config/types";
 import type { SetupResult } from "./engine";
+import { mockStudentCfg } from "./engine";
 import { buildPlan } from "../bench/plan";
 
 type Step = "specimen" | "specimen-config" | "teacher" | "teacher-config" | "suite-config" | "confirm" | "error";
 
-const MOCK_MODELS = ["mock-student-4b (synthetic)", "mock-student-2b (synthetic)"];
-const MOCK_TEACHERS = ["none (heuristic only)", "mock-teacher-8b (synthetic)"];
+const MOCK_MODELS = ["mock-student-4b", "mock-student-2b"];
+const MOCK_TEACHERS = ["none (heuristic only)", "mock-teacher-8b"];
 
 const EFFORT_CHOICES: ReasoningEffort[] = ["none", "low", "high"];
 
@@ -57,27 +58,8 @@ function applyForm(cfg: ModelConfig, values: Record<string, string>): ModelConfi
   });
 }
 
-const MOCK_MCFG: ModelConfig = {
-  name: "mock-student-4b (synthetic)",
-  hf: "mock/hf (synthetic)",
-  quant: "Q4_K_M",
-  file: null,
-  local_path: null,
-  reasoning: { effort: "none" },
-  sampling: { temperature: 0.9, top_p: 0.95, top_k: 40, min_p: 0.05, repeat_penalty: 1.05 },
-  runtime: { binary: "auto", port: 8750, context: 8192, ngl: 99, threads: 0, load_timeout_sec: 600 },
-};
-
-const MOCK_TCFG: ModelConfig = {
-  name: "mock-teacher-8b (synthetic)",
-  hf: "mock/hf (synthetic)",
-  quant: "Q4_K_M",
-  file: null,
-  local_path: null,
-  reasoning: { effort: "none" },
-  sampling: { temperature: 0.3, top_p: 0.9, top_k: 20, min_p: 0.05, repeat_penalty: 1 },
-  runtime: { binary: "auto", port: 8751, context: 8192, ngl: 99, threads: 0, load_timeout_sec: 600 },
-};
+const MOCK_MCFG = mockStudentCfg("mock-student-4b");
+const MOCK_TCFG = mockStudentCfg("mock-teacher-8b");
 
 export function SetupFlow({
   mock,
@@ -185,9 +167,13 @@ export function SetupFlow({
 
   if (step === "error") {
     return (
-      <Frame title="Setup error" footer="esc to exit">
-        <Text color="red">{error}</Text>
-      </Frame>
+      <Box flexDirection="column">
+        <Text bold color="white">
+          Setup error
+        </Text>
+        <Text color={RED_DEEP}>{error}</Text>
+        <Text dimColor>esc to exit</Text>
+      </Box>
     );
   }
 
@@ -255,7 +241,10 @@ export function SetupFlow({
     const plan = buildPlan(suite, number(seed, 20260101), Math.round(number(samples, 5)));
     const teacherLabel = teacherOn ? (teacherCfg?.name ?? "?") : "none (heuristic only)";
     return (
-      <Frame title="Confirm run" footer="enter on a row to choose | esc back">
+      <Box flexDirection="column">
+        <Text bold color="white">
+          Confirm run
+        </Text>
         <Kv k="specimen" v={modelCfg.name} />
         <Kv k="origin" v={modelCfg.local_path ?? `${modelCfg.hf ?? "-"} (${modelCfg.quant ?? "-"})`} />
         <Kv k="teacher" v={teacherLabel} />
@@ -275,11 +264,12 @@ export function SetupFlow({
           }}
           onCancel={() => setStep("suite-config")}
         />
-      </Frame>
+        <Text dimColor>enter on a row to choose | esc back</Text>
+      </Box>
     );
   }
 
-  return <Text dimColor>loading...</Text>;
+  return <Text color={GRAY}>loading...</Text>;
 }
 
 function SpecimenPicker({
@@ -314,16 +304,22 @@ function SpecimenPicker({
   }, [mock]);
   if (loadErr) {
     return (
-      <Frame title="Specimen">
-        <Text color="red">{loadErr}</Text>
-      </Frame>
+      <Box flexDirection="column">
+        <Text bold color="white">
+          Specimen
+        </Text>
+        <Text color={RED_DEEP}>{loadErr}</Text>
+      </Box>
     );
   }
   if (!names) {
     return (
-      <Frame title="Specimen">
-        <Text dimColor>loading configs...</Text>
-      </Frame>
+      <Box flexDirection="column">
+        <Text bold color="white">
+          Specimen
+        </Text>
+        <Text color={GRAY}>loading configs...</Text>
+      </Box>
     );
   }
   return (
@@ -363,12 +359,15 @@ function TeacherPicker({
   }, [mock]);
   if (!names) {
     return (
-      <Frame title="Teacher">
-        <Text dimColor>loading configs...</Text>
-      </Frame>
+      <Box flexDirection="column">
+        <Text bold color="white">
+          Teacher
+        </Text>
+        <Text color={GRAY}>loading configs...</Text>
+      </Box>
     );
   }
-  const options = names;
+  const options = ["none (heuristic only)", ...names];
   const subs = options.map((o) =>
     o.startsWith("none") ? "heuristic scoring only" : o.startsWith("mock-") ? "synthetic" : `configs/models/${o}.yaml`,
   );

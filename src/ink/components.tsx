@@ -1,23 +1,73 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Box, Text, useInput } from "ink";
 
-export function Frame({
-  title,
-  children,
-  footer,
+export const HEART_RED = "#FF2D55";
+export const RED_DEEP = "#C81E1E";
+export const WHITE = "#F2F3F5";
+export const GRAY = "#8B909A";
+
+function hexToRgb(hex: string): [number, number, number] {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  return [
+    parseInt(full.slice(0, 2), 16),
+    parseInt(full.slice(2, 4), 16),
+    parseInt(full.slice(4, 6), 16),
+  ];
+}
+
+export function lerpColor(a: string, b: string, t: number): string {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  const f = Math.max(0, Math.min(1, t));
+  const mix = ca.map((v, i) => Math.round(v + (cb[i]! - v) * f));
+  return `#${mix.map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+}
+
+export function GradientText({
+  text,
+  from = HEART_RED,
+  to = RED_DEEP,
+  bold,
 }: {
-  title: string;
-  children: ReactNode;
-  footer?: string;
+  text: string;
+  from?: string;
+  to?: string;
+  bold?: boolean;
 }) {
+  const chars = [...text];
+  const n = Math.max(1, chars.length - 1);
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginTop={1}>
-      <Text bold color="cyan">
-        {title}
-      </Text>
-      {children}
-      {footer ? <Text dimColor>{footer}</Text> : null}
-    </Box>
+    <Text bold={bold}>
+      {chars.map((c, i) => (
+        <Text key={i} color={lerpColor(from, to, chars.length === 1 ? 0 : i / n)}>
+          {c}
+        </Text>
+      ))}
+    </Text>
+  );
+}
+
+export function GradientBar({ frac, width = 20 }: { frac: number; width?: number }) {
+  const f = Math.max(0, Math.min(1, frac));
+  const filled = Math.round(f * width);
+  const cells: ReactNode[] = [];
+  for (let i = 0; i < width; i++) {
+    const t = width === 1 ? 0 : i / (width - 1);
+    cells.push(
+      <Text key={i} color={i < filled ? lerpColor(HEART_RED, RED_DEEP, t) : undefined} dimColor={i >= filled}>
+        {i < filled ? "█" : "░"}
+      </Text>,
+    );
+  }
+  return <Text>{cells}</Text>;
+}
+
+export function Arrow({ active }: { active?: boolean }) {
+  return (
+    <Text color={active === false ? GRAY : HEART_RED} bold={active !== false}>
+      {active === false ? " " : "❯"}
+    </Text>
   );
 }
 
@@ -44,17 +94,21 @@ export function SelectList({
     else if (key.escape) onCancel?.();
   });
   return (
-    <Frame title={title} footer={footer ?? "arrows move | enter select | esc back"}>
+    <Box flexDirection="column">
+      <Text bold color="white">
+        {title}
+      </Text>
       {options.map((o, i) => (
         <Box key={`${o}-${i}`} gap={1}>
-          <Text color={i === sel ? "cyan" : undefined}>{i === sel ? ">" : " "}</Text>
-          <Text bold={i === sel} color={i === sel ? "cyan" : undefined}>
+          <Arrow active={i === sel} />
+          <Text color={i === sel ? WHITE : GRAY} bold={i === sel}>
             {o}
           </Text>
           {subs?.[i] ? <Text dimColor>{subs[i]}</Text> : null}
         </Box>
       ))}
-    </Frame>
+      <Text dimColor>{footer ?? "arrows move | enter select | esc back"}</Text>
+    </Box>
   );
 }
 
@@ -134,36 +188,42 @@ export function ConfigForm({
   });
 
   return (
-    <Frame title={title} footer={footer ?? "type to edit | arrows move | enter next/confirm | esc back"}>
+    <Box flexDirection="column">
+      <Text bold color="white">
+        {title}
+      </Text>
       {fields.map((f, i) => (
         <Box key={f.key} gap={1}>
-          <Box width={22}>
-            <Text bold={i === active} color={i === active ? "cyan" : undefined}>
-              {pad(f.label, 22)}
+          <Arrow active={i === active} />
+          <Box width={20}>
+            <Text color={i === active ? WHITE : GRAY} bold={i === active}>
+              {pad(f.label, 20)}
             </Text>
           </Box>
-          <Box borderStyle={i === active ? "single" : undefined} borderColor="cyan" paddingX={i === active ? 1 : 0}>
-            <Text>{f.kind === "choice" ? `< ${values[f.key] ?? "-"} >` : `${values[f.key] ?? ""}_`}</Text>
-          </Box>
+          <Text color={i === active ? HEART_RED : GRAY}>
+            {f.kind === "choice" ? `< ${values[f.key] ?? "-"} >` : `${values[f.key] ?? ""}${i === active ? "_" : ""}`}
+          </Text>
           {f.hint ? <Text dimColor>{f.hint}</Text> : null}
         </Box>
       ))}
-    </Frame>
+      <Text dimColor>{footer ?? "type to edit | arrows move | enter next/confirm | esc back"}</Text>
+    </Box>
   );
 }
 
-const SPINNER_FRAMES = ["|", "/", "-", "\\"];
+const SPINNER_FRAMES = ["✶", "✱", "✻", "✽"];
 
 export function Spinner({ label }: { label: string }) {
   const [i, setI] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setI((x) => (x + 1) % SPINNER_FRAMES.length), 90);
+    const t = setInterval(() => setI((x) => (x + 1) % SPINNER_FRAMES.length), 110);
     return () => clearInterval(t);
   }, []);
   return (
-    <Text color="yellow">
-      {SPINNER_FRAMES[i]} {label}
-    </Text>
+    <Box gap={1}>
+      <GradientText text={SPINNER_FRAMES[i]!} />
+      <Text color="white">{label}</Text>
+    </Box>
   );
 }
 
@@ -190,37 +250,126 @@ export function Table({
   if (rows.length === 0) return <Text dimColor>{empty ?? "(no rows yet)"}</Text>;
   return (
     <Box flexDirection="column">
-      <Text bold>{columns.map((c) => fmtCell(c.label, c)).join("  ")}</Text>
+      <Text bold color="white">
+        {columns.map((c) => fmtCell(c.label, c)).join("  ")}
+      </Text>
       <Text dimColor>{columns.map((c) => "-".repeat(c.width)).join("  ")}</Text>
       {rows.map((r, ri) => (
-        <Text key={ri}>{columns.map((c) => fmtCell(r[c.key] ?? "-", c)).join("  ")}</Text>
+        <Text key={ri} color={ri === rows.length - 1 ? WHITE : GRAY}>
+          {columns.map((c) => fmtCell(r[c.key] ?? "-", c)).join("  ")}
+        </Text>
       ))}
     </Box>
   );
 }
 
-export function Bar({ frac, width = 20, color = "cyan" }: { frac: number; width?: number; color?: string }) {
-  const f = Math.max(0, Math.min(1, frac));
-  const filled = Math.round(f * width);
-  return (
-    <Text color={color}>
-      {"█".repeat(filled)}
-      {"░".repeat(Math.max(0, width - filled))}
-    </Text>
-  );
-}
-
 export function Kv({ k, v }: { k: string; v: ReactNode }) {
   return (
-    <Box>
+    <Box gap={1}>
       <Box width={20}>
-        <Text dimColor>{pad(k, 20)}</Text>
+        <Text color={GRAY}>{pad(k, 20)}</Text>
       </Box>
-      <Text>{v}</Text>
+      <Text color="white">{v}</Text>
     </Box>
   );
 }
 
 export function scoreColor(score: number): string {
-  return score >= 0.6 ? "green" : score >= 0.35 ? "yellow" : "red";
+  return score >= 0.6 ? WHITE : score >= 0.35 ? GRAY : RED_DEEP;
+}
+
+export interface CommandHint {
+  name: string;
+  usage: string;
+}
+
+export function PromptInput({
+  commands,
+  onSubmit,
+  placeholder,
+}: {
+  commands: CommandHint[];
+  onSubmit: (text: string) => void;
+  placeholder?: string;
+}) {
+  const [value, setValue] = useState("");
+  const [hist, setHist] = useState<string[]>([]);
+  const [histIdx, setHistIdx] = useState<number | null>(null);
+  const [blink, setBlink] = useState(true);
+
+  useEffect(() => {
+    const t = setInterval(() => setBlink((b) => !b), 530);
+    return () => clearInterval(t);
+  }, []);
+
+  useInput((input, key) => {
+    if (key.return) {
+      const text = value.trim();
+      if (text) {
+        setHist((h) => [...h, text]);
+        setHistIdx(null);
+      }
+      setValue("");
+      onSubmit(text);
+      return;
+    }
+    if (key.upArrow) {
+      if (hist.length === 0) return;
+      const idx = histIdx === null ? hist.length - 1 : Math.max(0, histIdx - 1);
+      setHistIdx(idx);
+      setValue(hist[idx] ?? "");
+      return;
+    }
+    if (key.downArrow) {
+      if (histIdx === null) return;
+      const idx = histIdx + 1;
+      if (idx >= hist.length) {
+        setHistIdx(null);
+        setValue("");
+      } else {
+        setHistIdx(idx);
+        setValue(hist[idx] ?? "");
+      }
+      return;
+    }
+    if (key.escape) {
+      setValue("");
+      setHistIdx(null);
+      return;
+    }
+    if (key.backspace) {
+      setValue((v) => v.slice(0, -1));
+      return;
+    }
+    if (input && !key.ctrl && !key.meta && !key.return && !key.upArrow && !key.downArrow && !key.tab) {
+      setValue((v) => v + input);
+    }
+  });
+
+  const first = (value.split(/\s+/)[0] ?? "").toLowerCase();
+  const matches =
+    first.length > 0 ? commands.filter((c) => c.name.startsWith(first) && c.name !== first) : [];
+  const showSug = matches.length > 0;
+
+  return (
+    <Box flexDirection="column">
+      {showSug
+        ? matches.slice(0, 4).map((c) => (
+            <Box key={c.name} gap={1} paddingLeft={1}>
+              <Text color={GRAY}>{c.name}</Text>
+              <Text dimColor>{c.usage.slice(c.name.length)}</Text>
+            </Box>
+          ))
+        : null}
+      <Box borderStyle="round" borderColor="#3a3d44" paddingX={1} width="100%">
+        <Text color={HEART_RED} bold>
+          ❯{" "}
+        </Text>
+        {value.length === 0 && placeholder ? <Text dimColor>{placeholder}</Text> : <Text color="white">{value}</Text>}
+        <Text inverse={blink} color={blink ? "black" : WHITE}>
+          {" "}
+        </Text>
+      </Box>
+    </Box>
+  );
 }

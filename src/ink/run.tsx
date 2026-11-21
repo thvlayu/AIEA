@@ -1,7 +1,18 @@
 import { useEffect, useMemo, useReducer, useRef } from "react";
 import path from "node:path";
-import { Box, Text, useInput } from "ink";
-import { Bar, Frame, Kv, Spinner, Table, scoreColor, type TableColumn } from "./components";
+import { Box, Text, useInput, useWindowSize } from "ink";
+import {
+  GRAY,
+  GradientBar,
+  GradientText,
+  Kv,
+  RED_DEEP,
+  Spinner,
+  Table,
+  WHITE,
+  scoreColor,
+  type TableColumn,
+} from "./components";
 import type { RunEngine, SetupResult } from "./engine";
 import type { RunHooks, RunSummary } from "../bench/runner";
 import { buildPlan } from "../bench/plan";
@@ -130,6 +141,10 @@ function fmtElapsed(ms: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
+function rule(width: number): string {
+  return "─".repeat(Math.max(10, width - 2));
+}
+
 export function RunScreen({
   setup,
   engine,
@@ -141,6 +156,7 @@ export function RunScreen({
   onDone: (s: RunSummary) => void;
   onExit: () => void;
 }) {
+  const { columns, rows } = useWindowSize();
   const store = useMemo(() => new RunStore(setup), [setup]);
   useRunStore(store);
   const [, forceTick] = useReducer((x: number) => x + 1, 0);
@@ -175,82 +191,102 @@ export function RunScreen({
   });
 
   const elapsed = Date.now() - startedAt;
-  const title = `${setup.mock ? "MOCK RUN" : "RUN"} | ${setup.model.name} | suite ${setup.suite.id} | seed ${setup.seed} | ${fmtElapsed(elapsed)}${
-    setup.mock ? " | synthetic data" : ""
-  }`;
 
   const footer =
     store.status === "error"
-      ? "esc exit"
+      ? "❯ esc to exit"
       : store.status === "running"
-        ? "q abort | ctrl-c quit"
+        ? "❯ q abort"
         : "";
 
   return (
-    <Frame title={title} footer={footer}>
-      {store.tiers.map((t) => (
-        <Box key={t.label} gap={1}>
-          <Box width={30}>
-            <Text>{t.label}</Text>
-          </Box>
-          <Bar frac={t.promptsTotal > 0 ? t.promptsDone / t.promptsTotal : 0} width={12} />
-          <Text dimColor>
-            {t.promptsDone}/{t.promptsTotal} prompts
-          </Text>
-          <Text dimColor>
-            {t.samplesDone}/{t.samplesTotal} samples
-          </Text>
-          <Text color={t.score === null ? "gray" : scoreColor(t.score)}>
-            {t.score === null ? "  -  " : (t.score * 100).toFixed(1).padStart(6)}
-          </Text>
-        </Box>
-      ))}
-
-      {store.download ? (
-        <Box gap={1} marginTop={1}>
-          <Box width={30}>
-            <Text>{store.download.label}</Text>
-          </Box>
-          <Bar
-            frac={store.download.total > 0 ? store.download.loaded / store.download.total : 0}
-            width={26}
-            color="magenta"
-          />
-          <Text dimColor>
-            {Math.round(store.download.loaded / 1048576)}/{Math.round(store.download.total / 1048576)} MB
-          </Text>
-        </Box>
-      ) : null}
-
-      <Box marginTop={1}>
-        {store.active ? (
-          <Spinner label={`${store.active.tierLabel} :: ${store.active.promptLabel} :: sample ${store.active.sampleIdx}/${store.active.samplesTotal}`} />
-        ) : (
-          <Text dimColor>{store.status === "running" ? "preparing..." : ""}</Text>
-        )}
+    <Box flexDirection="column" height={rows} overflow="hidden">
+      <Box gap={2}>
+        <GradientText text={setup.mock ? "MOCK RUN" : "RUN"} bold />
+        <Text bold color="white">
+          {setup.model.name}
+        </Text>
+        <Text dimColor>
+          suite {setup.suite.id} | seed {setup.seed} | {fmtElapsed(elapsed)}
+        </Text>
+        <Box flexGrow={1} />
+        <Text dimColor>teacher {setup.teacher?.name ?? "none"}</Text>
       </Box>
+      <Text dimColor>{rule(columns)}</Text>
 
-      {store.lastPrompt ? (
-        <Box marginTop={1} flexDirection="column">
-          <Text bold>latest prompt</Text>
-          <Kv k={store.lastPrompt.label} v={`score ${(store.lastPrompt.score * 100).toFixed(1)} | distinct ${store.lastPrompt.distinct} | modal ${store.lastPrompt.modal} | slop ${store.lastPrompt.slop}/100w`} />
-        </Box>
-      ) : null}
-
-      <Box marginTop={1} flexDirection="column">
-        {store.log.slice(-5).map((l, i) => (
-          <Text key={`${i}-${l}`} dimColor wrap="truncate-end">
-            {l}
-          </Text>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
+        {store.tiers.map((t) => (
+          <Box key={t.label} gap={2}>
+            <Box width={30}>
+              <Text color={t.promptsDone === t.promptsTotal && t.promptsTotal > 0 ? WHITE : GRAY}>{t.label}</Text>
+            </Box>
+            <GradientBar frac={t.promptsTotal > 0 ? t.promptsDone / t.promptsTotal : 0} width={12} />
+            <Text dimColor>
+              {t.promptsDone}/{t.promptsTotal} prompts
+            </Text>
+            <Text dimColor>
+              {t.samplesDone}/{t.samplesTotal} samples
+            </Text>
+            <Text color={t.score === null ? GRAY : scoreColor(t.score)} bold={t.score !== null && t.score >= 0.6}>
+              {t.score === null ? "  -  " : (t.score * 100).toFixed(1).padStart(6)}
+            </Text>
+          </Box>
         ))}
+
+        {store.download ? (
+          <Box gap={2} marginTop={1}>
+            <Box width={30}>
+              <Text color={GRAY}>{store.download.label}</Text>
+            </Box>
+            <GradientBar
+              frac={store.download.total > 0 ? store.download.loaded / store.download.total : 0}
+              width={26}
+            />
+            <Text dimColor>
+              {Math.round(store.download.loaded / 1048576)}/{Math.round(store.download.total / 1048576)} MB
+            </Text>
+          </Box>
+        ) : null}
+
+        <Box marginTop={1}>
+          {store.active ? (
+            <Spinner
+              label={`${store.active.tierLabel} :: ${store.active.promptLabel} :: sample ${store.active.sampleIdx}/${store.active.samplesTotal}`}
+            />
+          ) : (
+            <Text dimColor>{store.status === "running" ? "preparing..." : ""}</Text>
+          )}
+        </Box>
+
+        {store.lastPrompt ? (
+          <Box marginTop={1} flexDirection="column">
+            <Text bold color="white">
+              latest prompt
+            </Text>
+            <Kv
+              k={store.lastPrompt.label}
+              v={`score ${(store.lastPrompt.score * 100).toFixed(1)} | distinct ${store.lastPrompt.distinct} | modal ${store.lastPrompt.modal} | slop ${store.lastPrompt.slop}/100w`}
+            />
+          </Box>
+        ) : null}
+
+        <Box marginTop={1} flexDirection="column">
+          {store.log.slice(-6).map((l, i) => (
+            <Text key={`${i}-${l}`} dimColor wrap="truncate-end">
+              {l}
+            </Text>
+          ))}
+        </Box>
+
+        {store.status === "error" ? (
+          <Box marginTop={1}>
+            <Text color={RED_DEEP}>{store.error?.split("\n")[0]}</Text>
+          </Box>
+        ) : null}
       </Box>
 
-      {store.status === "error" ? (
-        <Box marginTop={1}>
-          <Text color="red">{store.error?.split("\n")[0]}</Text>
-        </Box>
-      ) : null}
-    </Frame>
+      <Text dimColor>{footer}</Text>
+    </Box>
   );
 }
 
@@ -279,6 +315,7 @@ export function SummaryScreen({
   mock: boolean;
   onExit: () => void;
 }) {
+  const { columns, rows } = useWindowSize();
   useInput((input, key) => {
     if (key.return || input === "q" || key.escape) onExit();
   });
@@ -289,45 +326,62 @@ export function SummaryScreen({
     score: (t.score * 100).toFixed(1),
   }));
   return (
-    <Frame
-      title={`${mock ? "MOCK" : "RUN"} COMPLETE | ${summary.model} | suite ${summary.suite}`}
-      footer="enter to exit"
-    >
-      <Text bold color={summary.aborted ? "yellow" : "green"}>
-        {summary.aborted ? "ABORTED | partial " : ""}AIEA-Creativity Index: {summary.aci.toFixed(1)} / 100
-      </Text>
-      <Box marginTop={1}>
-        <Table columns={SUMMARY_COLUMNS} rows={tierRows} />
-      </Box>
-      <Box marginTop={1} flexDirection="column">
+    <Box flexDirection="column" height={rows} overflow="hidden">
+      <Box gap={2}>
+        <GradientText text={mock ? "MOCK COMPLETE" : "RUN COMPLETE"} bold />
         <Text dimColor>
-          distinct {(summary.distinctRatio * 100).toFixed(1)}% | modal {(summary.modalShare * 100).toFixed(1)}% | river{" "}
-          {(summary.riverShare * 100).toFixed(1)}% | slop {summary.slopPer100.toFixed(2)}/100w | samples{" "}
-          {summary.samplesDone}/{summary.samplesTotal} | {(summary.elapsedMs / 1000).toFixed(1)}s
+          {summary.model} | suite {summary.suite}
         </Text>
+        <Box flexGrow={1} />
+        <Text dimColor>enter to continue</Text>
       </Box>
-      {summary.tiers.map((t) => {
-        const rows = summary.perPrompt
-          .filter((p) => p.item.tierId === t.id)
-          .map((p) => ({
-            probe: p.item.probe.id,
-            score: (p.stats.score * 100).toFixed(1),
-            distinct: `${p.stats.distinctCount}/${p.texts.length}`,
-            modal: `${Math.round(p.stats.modalShare * 100)}%`,
-            river: `${Math.round(p.stats.riverShare * 100)}%`,
-            slop: p.stats.slopPer100.toFixed(1),
-          }));
-        return (
-          <Box key={t.id} marginTop={1} flexDirection="column">
-            <Text bold>{t.label}</Text>
-            <Table columns={PROMPT_COLUMNS} rows={rows} />
-          </Box>
-        );
-      })}
-      <Box marginTop={1}>
-        <Text dimColor>report: {mock ? "(mock: synthetic run, nothing written)" : path.join(summary.outDir, "report.md")}</Text>
+      <Text dimColor>{rule(columns)}</Text>
+
+      <Box flexDirection="column" flexGrow={1} overflow="hidden" paddingTop={1}>
+        <Box gap={2}>
+          <GradientText text={`${summary.aci.toFixed(1)}`} bold />
+          <Text dimColor>/ 100 AIEA-Creativity Index{summary.aborted ? " (aborted, partial)" : ""}</Text>
+        </Box>
+
+        <Box marginTop={1}>
+          <Table columns={SUMMARY_COLUMNS} rows={tierRows} />
+        </Box>
+
+        <Box marginTop={1} flexDirection="column">
+          <Text dimColor>
+            distinct {(summary.distinctRatio * 100).toFixed(1)}% | modal {(summary.modalShare * 100).toFixed(1)}% | river{" "}
+            {(summary.riverShare * 100).toFixed(1)}% | slop {summary.slopPer100.toFixed(2)}/100w | samples{" "}
+            {summary.samplesDone}/{summary.samplesTotal} | {(summary.elapsedMs / 1000).toFixed(1)}s
+          </Text>
+        </Box>
+
+        {summary.tiers.map((t) => {
+          const rowsP = summary.perPrompt
+            .filter((p) => p.item.tierId === t.id)
+            .map((p) => ({
+              probe: p.item.probe.id,
+              score: (p.stats.score * 100).toFixed(1),
+              distinct: `${p.stats.distinctCount}/${p.texts.length}`,
+              modal: `${Math.round(p.stats.modalShare * 100)}%`,
+              river: `${Math.round(p.stats.riverShare * 100)}%`,
+              slop: p.stats.slopPer100.toFixed(1),
+            }));
+          return (
+            <Box key={t.id} marginTop={1} flexDirection="column">
+              <Text bold color="white">
+                {t.label}
+              </Text>
+              <Table columns={PROMPT_COLUMNS} rows={rowsP} />
+            </Box>
+          );
+        })}
+
+        <Box marginTop={1}>
+          <Text dimColor>
+            report: {mock ? "(mock: synthetic run, nothing written)" : path.join(summary.outDir, "report.md")}
+          </Text>
+        </Box>
       </Box>
-      {summary.aborted ? <Text color="yellow">run was aborted; partial report still written</Text> : null}
-    </Frame>
+    </Box>
   );
 }

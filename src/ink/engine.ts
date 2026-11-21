@@ -7,6 +7,19 @@ import { tierPrompts } from "../suites/creativity/prompts";
 import { runSuite } from "../bench/runner";
 import { resolveLlama, missingLlamaMessage } from "../llama/resolve";
 
+export function mockStudentCfg(name: string): ModelConfig {
+  return {
+    name,
+    hf: "mock/hf (synthetic)",
+    quant: "Q4_K_M",
+    file: null,
+    local_path: null,
+    reasoning: { effort: "none" },
+    sampling: { temperature: 0.9, top_p: 0.95, top_k: 40, min_p: 0.05, repeat_penalty: 1.05 },
+    runtime: { binary: "auto", port: 8750, context: 8192, ngl: 99, threads: 0, load_timeout_sec: 600 },
+  };
+}
+
 export interface SetupResult {
   mock: boolean;
   model: ModelConfig;

@@ -87,26 +87,44 @@ launched over ssh or inside a Colab VM session without an interactive terminal.
 
 ## Interactive UI
 
-The interactive path is built with [Ink](https://github.com/vadimdemedes/ink) (React for
-terminals). `bun run aiea` walks through:
+The interactive path is built with [Ink](https://github.com/vadimdemedes/ink) 7 (React for
+terminals). It is a full-screen, borderless command shell in the style of a type-driven
+eval CLI: white text on the terminal background, gray for secondary information, and a
+heart-red to deep-red gradient as the only accent (wordmark, bars, spinner, ACI number,
+selection arrow). The arrow glyph is `❯` everywhere. Nothing is boxed except the input
+line at the bottom of the screen.
 
-1. **Specimen** - pick the model under test from `configs/models/`.
-2. **Specimen config** - edit temperature, top_p, top_k, min_p, repeat penalty, context,
-   GPU layers, port, reasoning effort. Edits are run-scoped overrides; YAMLs are not
-   rewritten.
-3. **Teacher** - pick the judge model, or "none" for heuristic-only scoring.
-4. **Teacher config** - same fields, applied to the judge server via run-scoped overrides.
-5. **Suite** - confirm samples per prompt and run seed.
-6. **Run screen** - live per-tier progress bars (prompts and samples), spinner on the
-   active sample, a "latest prompt" metrics card, and a rolling log pane. `q` or `esc`
-   aborts; a partial report is still written.
-7. **Summary screen** - the ACI, a tier table, run-level metrics, and a per-prompt
-   metrics table for every tier (distinct, modal share, river share, slop density).
+`bun run aiea` opens the shell. Commands:
 
-`bun run dev:mock` runs the exact same flow with a synthetic student, a synthetic
-teacher, fabricated outputs, and fabricated metrics, at accelerated speed. It exists so
-the UI can be reviewed without a GPU. Headless (non-TTY) invocations fall back to flat
-mock lines automatically.
+```
+help                          all commands
+run <model>                   run the creativity suite on one model
+run <suite> <model>           run a specific suite on one model
+run all [suite]               every configured model, one by one
+mock [model] | mock all       synthetic runs, no model needed
+models                        list configured models
+teacher <model|none>          set the judge model for scored tiers
+samples <n>                   samples per prompt
+seed <n>                      reproducible runs
+setup                         guided specimen + teacher + config wizard
+clear | exit
+```
+
+Type a command into the `❯` input box at the bottom. The input has command-prefix
+suggestions and arrow-key history. `teacher`, `samples` and `seed` persist for the
+session, so after the first setup a whole model lineup runs with three keystrokes.
+
+When a run starts, the input is replaced by the live run view: per-tier gradient progress
+bars (prompts and samples), a spinner on the active sample, a "latest prompt" metrics
+card, and a rolling log. `q` or `esc` aborts; a partial report is still written. The
+summary view shows the ACI, a tier table, run-level metrics, and a per-prompt metrics
+table for every tier (distinct, modal share, river share, slop density), then returns to
+the command shell.
+
+`bun run dev:mock` runs the exact same shell in mock mode: synthetic student, synthetic
+teacher, fabricated outputs and metrics at accelerated speed. In mock mode every command
+works (`run all`, `teacher`, `samples`...) so the full workflow can be reviewed without a
+GPU. Headless (non-TTY) invocations fall back to flat mock lines automatically.
 
 ## The llama binary
 
