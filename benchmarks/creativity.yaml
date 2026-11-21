@@ -1,0 +1,49 @@
+id: creativity
+title: AIEA-Creativity (AIEA-C)
+defaults:
+  samples_per_prompt: 5
+  seed: 20260101
+  max_tokens: 512
+
+# Optional judge slot: set judge.model to another model config name (a second
+# llama-server will be spawned). Leave null for heuristic-only scoring.
+judge: null
+
+output_dir: results
+
+tiers:
+  - id: t1_mode_collapse
+    label: Tier 1 Mode Collapse Probe
+    enabled: true
+    weight: 0.25
+    prompts: 5
+    max_tokens: 128
+
+  - id: t2_constrained_divergence
+    label: Tier 2 Constrained Divergence
+    enabled: true
+    weight: 0.20
+    prompts: 4
+    max_tokens: 512
+
+  - id: t3_slop_resistance
+    label: Tier 3 Slop Resistance
+    enabled: true
+    weight: 0.20
+    prompts: 4
+    max_tokens: 400
+
+  - id: t4_literature_craft
+    label: Tier 4 Literature Craft
+    enabled: true
+    weight: 0.20
+    prompts: 3
+    max_tokens: 1400
+    word_window: [600, 800]
+
+  - id: t5_associative_leap
+    label: Tier 5 Associative Leap
+    enabled: true
+    weight: 0.15
+    prompts: 3
+    max_tokens: 700

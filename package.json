@@ -1,0 +1,16 @@
+{
+  "name": "aiea",
+  "version": "0.1.0",
+  "description": "Asa Intelligence Evaluation and Analysis (AIEA). Local LLM benchmark runner. First suite: AIEA-Creativity (AIEA-C).",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "aiea": "bun run src/cli.ts",
+    "mock": "bun run src/cli.ts mock",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.6.0"
+  }
+}
