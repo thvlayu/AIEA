@@ -192,12 +192,22 @@ export function RunScreen({
 
   const elapsed = Date.now() - startedAt;
 
-  const footer =
-    store.status === "error"
-      ? "❯ esc to exit"
-      : store.status === "running"
-        ? "❯ q abort"
-        : "";
+  const footerRow =
+    store.status === "error" ? (
+      <Box gap={1}>
+        <Text color={WHITE} bold>
+          ❯
+        </Text>
+        <Text dimColor>esc to exit</Text>
+      </Box>
+    ) : store.status === "running" ? (
+      <Box gap={1}>
+        <Text color={WHITE} bold>
+          ❯
+        </Text>
+        <Text dimColor>q abort</Text>
+      </Box>
+    ) : null;
 
   return (
     <Box flexDirection="column" height={rows} overflow="hidden">
@@ -285,7 +295,7 @@ export function RunScreen({
         ) : null}
       </Box>
 
-      <Text dimColor>{footer}</Text>
+      {footerRow}
     </Box>
   );
 }

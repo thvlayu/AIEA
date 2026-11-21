@@ -65,8 +65,45 @@ export function GradientBar({ frac, width = 20 }: { frac: number; width?: number
 
 export function Arrow({ active }: { active?: boolean }) {
   return (
-    <Text color={active === false ? GRAY : HEART_RED} bold={active !== false}>
+    <Text color={active === false ? GRAY : WHITE} bold={active !== false}>
       {active === false ? " " : "❯"}
+    </Text>
+  );
+}
+
+const FLOW_STOPS = [HEART_RED, RED_DEEP, WHITE];
+
+function sampleCycle(p: number): string {
+  const n = FLOW_STOPS.length;
+  const x = ((p % 1) + 1) % 1;
+  const seg = x * n;
+  const i = Math.floor(seg);
+  const t = seg - i;
+  return lerpColor(FLOW_STOPS[i % n]!, FLOW_STOPS[(i + 1) % n]!, t);
+}
+
+export function FlowText({
+  text,
+  period = 2.5,
+  bold,
+}: {
+  text: string;
+  period?: number;
+  bold?: boolean;
+}) {
+  const [offset, setOffset] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setOffset((o) => (o + 0.06) % 1), 120);
+    return () => clearInterval(t);
+  }, []);
+  const chars = [...text];
+  return (
+    <Text bold={bold}>
+      {chars.map((c, i) => (
+        <Text key={i} color={sampleCycle(i / Math.max(1, chars.length) * period + offset)}>
+          {c}
+        </Text>
+      ))}
     </Text>
   );
 }
@@ -211,7 +248,7 @@ export function ConfigForm({
   );
 }
 
-const SPINNER_FRAMES = ["✶", "✱", "✻", "✽"];
+const SPINNER_FRAMES = ["·  ", "·· ", "···"];
 
 export function Spinner({ label }: { label: string }) {
   const [i, setI] = useState(0);
@@ -221,7 +258,7 @@ export function Spinner({ label }: { label: string }) {
   }, []);
   return (
     <Box gap={1}>
-      <GradientText text={SPINNER_FRAMES[i]!} />
+      <GradientText text={SPINNER_FRAMES[i]!.padEnd(3, " ")} />
       <Text color="white">{label}</Text>
     </Box>
   );
@@ -362,7 +399,7 @@ export function PromptInput({
           ))
         : null}
       <Box borderStyle="round" borderColor="#3a3d44" paddingX={1} width="100%">
-        <Text color={HEART_RED} bold>
+        <Text color={WHITE} bold>
           ❯{" "}
         </Text>
         {value.length === 0 && placeholder ? <Text dimColor>{placeholder}</Text> : <Text color="white">{value}</Text>}

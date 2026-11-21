@@ -1,9 +1,10 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Box, Text, render, useApp, useWindowSize } from "ink";
 import {
   Arrow,
   GRAY,
   GradientText,
+  FlowText,
   PromptInput,
   RED_DEEP,
   Table,
@@ -15,7 +16,12 @@ import { SetupFlow } from "./setup";
 import { RunScreen, SummaryScreen } from "./run";
 import { createMockEngine, createRealEngine, mockStudentCfg, type SetupResult } from "./engine";
 import type { RunSummary } from "../bench/runner";
-import { listModelConfigNames, loadModelConfig, loadSuiteConfig } from "../config/load";
+import {
+  listModelConfigNames,
+  listSuiteNames,
+  loadModelConfig,
+  loadSuiteConfig,
+} from "../config/load";
 import type { ModelConfig } from "../config/types";
 
 const MOCK_MODELS = ["mock-student-4b", "mock-student-2b"];
@@ -25,6 +31,7 @@ const COMMANDS: CommandHint[] = [
   { name: "run", usage: "run <model> | run <suite> <model> | run all [suite]" },
   { name: "mock", usage: "mock [model] | mock all   (synthetic, no model)" },
   { name: "models", usage: "models" },
+  { name: "suites", usage: "suites" },
   { name: "teacher", usage: "teacher <model|none>   judge for scored tiers" },
   { name: "samples", usage: "samples <n>   samples per prompt" },
   { name: "seed", usage: "seed <n>" },
@@ -35,6 +42,7 @@ const COMMANDS: CommandHint[] = [
 
 type Msg =
   | { kind: "text"; text: string; dim?: boolean }
+  | { kind: "section"; text: string }
   | { kind: "cmd"; cmd: string; rest?: string }
   | { kind: "error"; text: string }
   | { kind: "aci"; model: string; aci: number; note?: string }
@@ -42,15 +50,7 @@ type Msg =
   | { kind: "spacer" };
 
 function welcomeMsgs(): Msg[] {
-  return [
-    { kind: "text", text: "creativity benchmark runner for local llama.cpp models", dim: true },
-    { kind: "spacer" },
-    { kind: "cmd", cmd: "run", rest: "creativity qwen3.5-4b-q4" },
-    { kind: "cmd", cmd: "run", rest: "all" },
-    { kind: "cmd", cmd: "mock", rest: "(synthetic preview, no model needed)" },
-    { kind: "cmd", cmd: "help", rest: "all commands" },
-    { kind: "spacer" },
-  ];
+  return [{ kind: "text", text: "loading models and suites...", dim: true }];
 }
 
 function helpMsgs(): Msg[] {
@@ -58,6 +58,7 @@ function helpMsgs(): Msg[] {
     { kind: "cmd", cmd: "run", rest: "<model> | run <suite> <model> | run all [suite]" },
     { kind: "cmd", cmd: "mock", rest: "[model] | mock all   (synthetic, no model)" },
     { kind: "cmd", cmd: "models", rest: "list configured models" },
+    { kind: "cmd", cmd: "suites", rest: "list available suites" },
     { kind: "cmd", cmd: "teacher", rest: "<model|none>   judge model for scored tiers" },
     { kind: "cmd", cmd: "samples", rest: "<n>   samples per prompt" },
     { kind: "cmd", cmd: "seed", rest: "<n>   reproducible runs" },
@@ -66,6 +67,118 @@ function helpMsgs(): Msg[] {
     { kind: "cmd", cmd: "exit", rest: undefined },
     { kind: "text", text: "teacher, samples and seed persist for this session only", dim: true },
   ];
+}
+
+const MODEL_COLUMNS: TableColumn[] = [
+  { key: "model", label: "model", width: 22 },
+  { key: "origin", label: "origin", width: 44 },
+  { key: "quant", label: "quant", width: 10 },
+  { key: "effort", label: "effort", width: 7 },
+  { key: "port", label: "port", width: 6, align: "right" },
+];
+
+const SUITE_COLUMNS: TableColumn[] = [
+  { key: "suite", label: "suite", width: 14 },
+  { key: "title", label: "title", width: 30 },
+  { key: "tiers", label: "tiers", width: 6, align: "right" },
+  { key: "samples", label: "samples", width: 8, align: "right" },
+  { key: "seed", label: "seed", width: 10, align: "right" },
+];
+
+async function buildModelsMsgs(mockMode: boolean): Promise<Msg[]> {
+  if (mockMode) {
+    return [
+      { kind: "section", text: "models available" },
+      {
+        kind: "table",
+        columns: MODEL_COLUMNS,
+        rows: MOCK_MODELS.map((n) => ({
+          model: n,
+          origin: "mock/hf (synthetic)",
+          quant: "Q4_K_M",
+          effort: "none",
+          port: "8750",
+        })),
+      },
+    ];
+  }
+  const msgs: Msg[] = [{ kind: "section", text: "models available" }];
+  try {
+    const names = await listModelConfigNames();
+    const rows: Array<Record<string, string>> = [];
+    for (const n of names) {
+      try {
+        const c = await loadModelConfig(n);
+        rows.push({
+          model: n,
+          origin: c.local_path ?? `${c.hf ?? "-"}`,
+          quant: c.quant ?? "-",
+          effort: c.reasoning.effort,
+          port: String(c.runtime.port),
+        });
+      } catch (err) {
+        rows.push({
+          model: n,
+          origin: `INVALID: ${(err as Error).message.slice(0, 40)}`,
+          quant: "-",
+          effort: "-",
+          port: "-",
+        });
+      }
+    }
+    msgs.push({ kind: "table", columns: MODEL_COLUMNS, rows });
+  } catch (err) {
+    msgs.push({ kind: "error", text: (err as Error).message });
+  }
+  return msgs;
+}
+
+async function buildSuitesMsgs(): Promise<Msg[]> {
+  const msgs: Msg[] = [{ kind: "section", text: "suites available" }];
+  try {
+    const names = await listSuiteNames();
+    const rows: Array<Record<string, string>> = [];
+    for (const n of names) {
+      try {
+        const sc = await loadSuiteConfig(n);
+        rows.push({
+          suite: sc.id,
+          title: sc.title,
+          tiers: String(sc.tiers.filter((t) => t.enabled).length),
+          samples: String(sc.defaults.samples_per_prompt),
+          seed: String(sc.defaults.seed),
+        });
+      } catch (err) {
+        rows.push({
+          suite: n,
+          title: `INVALID: ${(err as Error).message.slice(0, 30)}`,
+          tiers: "-",
+          samples: "-",
+          seed: "-",
+        });
+      }
+    }
+    msgs.push({ kind: "table", columns: SUITE_COLUMNS, rows });
+  } catch (err) {
+    msgs.push({ kind: "error", text: (err as Error).message });
+  }
+  return msgs;
+}
+
+function Clock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const two = (n: number) => String(n).padStart(2, "0");
+  const d = now;
+  return (
+    <Text dimColor>
+      {d.getFullYear()}-{two(d.getMonth() + 1)}-{two(d.getDate())} {two(d.getHours())}:{two(d.getMinutes())}:
+      {two(d.getSeconds())}
+    </Text>
+  );
 }
 
 function rule(width: number): string {
@@ -77,6 +190,12 @@ function MsgView({ m }: { m: Msg }) {
     case "text":
       return (
         <Text color={m.dim ? GRAY : WHITE} dimColor={m.dim}>
+          {m.text}
+        </Text>
+      );
+    case "section":
+      return (
+        <Text bold color="white">
           {m.text}
         </Text>
       );
@@ -125,6 +244,34 @@ export function App({ mock }: { mock: boolean }) {
   const suiteRef = useRef<string>("creativity");
   const queueRef = useRef<string[]>([]);
   const summaryRef = useRef<RunSummary | null>(null);
+
+  useEffect(() => {
+    process.stdout.write("\x1b[?25l");
+    return () => {
+      process.stdout.write("\x1b[?25h");
+    };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const models = await buildModelsMsgs(mock);
+      const suites = await buildSuitesMsgs();
+      const loaded: Msg[] = [
+        ...models,
+        { kind: "spacer" },
+        ...suites,
+        { kind: "spacer" },
+        { kind: "text", text: "type a command below; help lists everything", dim: true },
+      ];
+      if (alive) setMsgs(loaded);
+    })().catch((err: Error) => {
+      if (alive) setMsgs([{ kind: "error", text: err.message }]);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [mock]);
 
   const push = (m: Msg | Msg[]) => setMsgs((prev) => [...prev, ...(Array.isArray(m) ? m : [m])]);
 
@@ -195,50 +342,11 @@ export function App({ mock }: { mock: boolean }) {
         return;
       }
       case "models": {
-        if (mock) {
-          push({
-            kind: "table",
-            columns: [
-              { key: "model", label: "model", width: 22 },
-              { key: "origin", label: "origin", width: 24 },
-              { key: "quant", label: "quant", width: 9 },
-              { key: "effort", label: "effort", width: 7 },
-            ],
-            rows: MOCK_MODELS.map((n) => ({ model: n, origin: "mock/hf (synthetic)", quant: "Q4_K_M", effort: "none" })),
-          });
-          return;
-        }
-        try {
-          const names = await listModelConfigNames();
-          const rows: Array<Record<string, string>> = [];
-          for (const n of names) {
-            try {
-              const c = await loadModelConfig(n);
-              rows.push({
-                model: n,
-                origin: c.local_path ?? `${c.hf ?? "-"}`,
-                quant: c.quant ?? "-",
-                effort: c.reasoning.effort,
-                port: String(c.runtime.port),
-              });
-            } catch (err) {
-              rows.push({ model: n, origin: `INVALID: ${(err as Error).message.slice(0, 40)}`, quant: "-", effort: "-", port: "-" });
-            }
-          }
-          push({
-            kind: "table",
-            columns: [
-              { key: "model", label: "model", width: 22 },
-              { key: "origin", label: "origin", width: 44 },
-              { key: "quant", label: "quant", width: 10 },
-              { key: "effort", label: "effort", width: 7 },
-              { key: "port", label: "port", width: 6, align: "right" },
-            ],
-            rows,
-          });
-        } catch (err) {
-          push({ kind: "error", text: (err as Error).message });
-        }
+        push(await buildModelsMsgs(mock));
+        return;
+      }
+      case "suites": {
+        push(await buildSuitesMsgs());
         return;
       }
       case "run":
@@ -416,13 +524,10 @@ export function App({ mock }: { mock: boolean }) {
   return (
     <Box flexDirection="column" height={rows} overflow="hidden">
       <Box gap={2}>
-        <GradientText text="AIEA" bold />
+        <FlowText text="AIEA" bold />
         <Text dimColor>Asa Intelligence Evaluation and Analysis</Text>
         <Box flexGrow={1} />
-        <Text dimColor>
-          {mock ? "mock | " : ""}teacher {teacherRef.current ?? "none"} | samples {samplesRef.current ?? 5} | seed{" "}
-          {seedRef.current ?? 20260101}
-        </Text>
+        <Clock />
       </Box>
       <Text dimColor>{rule(columns)}</Text>
 
@@ -438,6 +543,11 @@ export function App({ mock }: { mock: boolean }) {
 }
 
 export async function runApp(mock: boolean): Promise<void> {
+  const restoreCursor = () => {
+    process.stdout.write("\x1b[?25h");
+  };
+  process.on("exit", restoreCursor);
   const instance = render(<App mock={mock} />);
   await instance.waitUntilExit();
+  restoreCursor();
 }
